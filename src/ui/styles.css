@@ -40,6 +40,55 @@ header h1 {
   font-size: 0.9rem;
 }
 
+.toast {
+  margin: -0.5rem 0 1rem;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.now-playing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  background: rgba(61, 154, 106, 0.08);
+  font-size: 0.85rem;
+}
+
+.delta-up {
+  color: #6dcea0;
+}
+
+.delta-down {
+  color: #e08a6a;
+}
+
+.mutes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.mutes-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.mute-toggle {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  cursor: pointer;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;

@@ -1,5 +1,6 @@
 import { createRng } from '../lib/rng'
 import { cloneGenome, genomesEqual, type MusicGenome } from '../music/genome'
+import { applyChannelFingerprint } from '../music/fingerprint'
 import type { Personality } from '../music/personality'
 import { evaluateFitness, type FitnessResult } from './fitness'
 import {
@@ -10,6 +11,7 @@ import {
 } from './generation'
 import {
   DEFAULT_MUTATION_CONFIG,
+  intensityWithStagnation,
   mutate,
   mutateN,
   pickIntensity,
@@ -40,6 +42,8 @@ export interface EvolutionState {
   generationIndex: number
   genome: MusicGenome
   fitness: FitnessResult
+  /** Fitness of the previous accepted generation (for UI delta). */
+  previousFitness: number
   /** Original user seed (for display / reproducibility labels). */
   rngSeed: number
   /** Current Mulberry32 state for resume. */
@@ -49,6 +53,8 @@ export interface EvolutionState {
   lastMutationName: string
   lastDescription: string
   channelId?: string
+  /** Optional bookmarked generation index within history. */
+  bookmarkIndex: number | null
 }
 
 export interface StepResult {
@@ -57,6 +63,7 @@ export interface StepResult {
   forceAccepted: boolean
   exploredWorse: boolean
   candidates: Candidate[]
+  fitnessDelta: number
 }
 
 export function createEvolutionState(
@@ -69,10 +76,14 @@ export function createEvolutionState(
   },
 ): EvolutionState {
   const config = { ...DEFAULT_EVOLUTION_CONFIG, ...options?.config }
-  const fitness = evaluateFitness(genome, options?.personality)
+  const seeded =
+    options?.channelId !== undefined
+      ? applyChannelFingerprint(options.channelId, genome)
+      : cloneGenome(genome)
+  const fitness = evaluateFitness(seeded, options?.personality)
   const record: GenerationRecord = {
     index: 0,
-    genome: cloneGenome(genome),
+    genome: cloneGenome(seeded),
     fitness: fitness.score,
     metrics: fitness.metrics,
     mutationName: 'seed',
@@ -83,8 +94,9 @@ export function createEvolutionState(
   }
   return {
     generationIndex: 0,
-    genome: cloneGenome(genome),
+    genome: cloneGenome(seeded),
     fitness,
+    previousFitness: fitness.score,
     rngSeed,
     rngState: rngSeed >>> 0,
     stagnationStreak: 0,
@@ -92,6 +104,7 @@ export function createEvolutionState(
     lastMutationName: 'seed',
     lastDescription: 'initial seed',
     channelId: options?.channelId,
+    bookmarkIndex: null,
   }
 }
 
@@ -115,29 +128,38 @@ export function stepGeneration(
   }
 
   const rng = createRng(state.rngState)
+  const mutConfig = intensityWithStagnation(
+    config.mutation,
+    state.stagnationStreak,
+    config.selection.stagnationLimit,
+  )
 
   const candidates: Candidate[] = []
   const n = config.candidatesPerGeneration
 
   for (let i = 0; i < n; i++) {
-    const intensity = pickIntensity(rng, config.mutation)
+    const intensity = pickIntensity(rng, mutConfig)
     const mutCount =
       intensity === 'experimental' ? rng.int(2, 3) : intensity === 'moderate' ? rng.int(1, 2) : 1
     const mutation =
       mutCount > 1
         ? mutateN(state.genome, rng, mutCount, {
             intensity,
-            config: config.mutation,
+            config: mutConfig,
             personality: options?.personality,
           })
         : mutate(state.genome, rng, {
             intensity,
-            config: config.mutation,
+            config: mutConfig,
             personality: options?.personality,
           })
-    const fit = evaluateFitness(mutation.genome, options?.personality)
+    const fingerprinted =
+      state.channelId !== undefined
+        ? applyChannelFingerprint(state.channelId, mutation.genome)
+        : mutation.genome
+    const fit = evaluateFitness(fingerprinted, options?.personality)
     candidates.push({
-      genome: mutation.genome,
+      genome: fingerprinted,
       fitness: fit.score,
       mutationName: mutation.mutationName,
       description: mutation.description,
@@ -157,6 +179,7 @@ export function stepGeneration(
   const winner = selection.winner
   const changed = !genomesEqual(winner.genome, state.genome)
   const fitness = evaluateFitness(winner.genome, options?.personality)
+  const fitnessDelta = fitness.score - state.fitness.score
 
   const generationIndex = state.generationIndex + 1
   const record: GenerationRecord = {
@@ -180,6 +203,7 @@ export function stepGeneration(
     generationIndex,
     genome: cloneGenome(winner.genome),
     fitness,
+    previousFitness: state.fitness.score,
     rngSeed: state.rngSeed,
     rngState: rng.getState(),
     stagnationStreak: changed ? 0 : state.stagnationStreak + 1,
@@ -187,6 +211,7 @@ export function stepGeneration(
     lastMutationName: winner.mutationName,
     lastDescription: winner.description,
     channelId: state.channelId,
+    bookmarkIndex: state.bookmarkIndex,
   }
 
   return {
@@ -195,6 +220,7 @@ export function stepGeneration(
     forceAccepted: selection.forceAccepted,
     exploredWorse: selection.exploredWorse,
     candidates,
+    fitnessDelta,
   }
 }
 
@@ -211,6 +237,33 @@ export function runGenerations(
   return state
 }
 
+/** Bookmark current generation index. */
+export function setBookmark(state: EvolutionState, index: number | null): EvolutionState {
+  return { ...state, bookmarkIndex: index }
+}
+
+/**
+ * Rewind genome/fitness to a generation still in bounded history.
+ * Keeps RNG state so future evolution continues (does not time-travel RNG).
+ */
+export function rewindToGeneration(state: EvolutionState, index: number): EvolutionState | null {
+  const record = state.history.records.find((r) => r.index === index)
+  if (!record) return null
+  return {
+    ...state,
+    generationIndex: record.index,
+    genome: cloneGenome(record.genome),
+    previousFitness: state.fitness.score,
+    fitness: {
+      score: record.fitness,
+      metrics: record.metrics,
+    },
+    lastMutationName: record.mutationName,
+    lastDescription: `rewind: ${record.description}`,
+    stagnationStreak: 0,
+  }
+}
+
 export interface EvolutionSnapshot {
   version: 1
   state: EvolutionState
@@ -225,5 +278,11 @@ export function restoreSnapshot(raw: unknown): EvolutionState {
   if (!snap || snap.version !== 1 || !snap.state) {
     throw new Error('Invalid evolution snapshot')
   }
-  return snap.state
+  // Back-compat for older snapshots missing new fields
+  const s = snap.state
+  return {
+    ...s,
+    previousFitness: s.previousFitness ?? s.fitness.score,
+    bookmarkIndex: s.bookmarkIndex ?? null,
+  }
 }

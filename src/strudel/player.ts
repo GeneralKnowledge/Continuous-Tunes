@@ -3,17 +3,23 @@
  * Verified against @strudel/web@1.3.0: initStrudel, evaluate, hush, samples.
  */
 import { initStrudel, evaluate, hush, samples } from '@strudel/web'
-import { compileGenome } from './compiler'
+import { compileGenome, type LayerMutes } from './compiler'
 import type { MusicGenome } from '../music/genome'
 
 export type PlayerStatus = 'idle' | 'loading' | 'ready' | 'playing' | 'error'
 
+export interface PlayResult {
+  code: string
+  recovered: boolean
+}
+
 export interface StrudelPlayer {
   status: () => PlayerStatus
   error: () => string | null
+  lastGoodCode: () => string | null
   init: () => Promise<void>
-  playGenome: (genome: MusicGenome) => Promise<string>
-  playCode: (code: string) => Promise<void>
+  playGenome: (genome: MusicGenome, mutes?: LayerMutes) => Promise<PlayResult>
+  playCode: (code: string) => Promise<PlayResult>
   stop: () => void
   isPlaying: () => boolean
 }
@@ -23,6 +29,7 @@ export function createStrudelPlayer(): StrudelPlayer {
   let error: string | null = null
   let playing = false
   let initPromise: Promise<void> | null = null
+  let lastGood: string | null = null
 
   async function init(): Promise<void> {
     if (status === 'ready' || status === 'playing') return
@@ -31,7 +38,6 @@ export function createStrudelPlayer(): StrudelPlayer {
     status = 'loading'
     initPromise = (async () => {
       try {
-        // initStrudel returns a Promise in 1.3.0 (initDone)
         await initStrudel({
           prebake: async () => {
             await samples('github:tidalcycles/dirt-samples')
@@ -50,17 +56,43 @@ export function createStrudelPlayer(): StrudelPlayer {
     return initPromise
   }
 
-  async function playCode(code: string): Promise<void> {
+  async function playCode(code: string): Promise<PlayResult> {
     await init()
-    await evaluate(code)
-    playing = true
-    status = 'playing'
+    try {
+      await evaluate(code)
+      lastGood = code
+      playing = true
+      status = 'playing'
+      error = null
+      return { code, recovered: false }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+      try {
+        hush()
+      } catch {
+        // ignore
+      }
+      if (lastGood) {
+        try {
+          await evaluate(lastGood)
+          playing = true
+          status = 'playing'
+          return { code: lastGood, recovered: true }
+        } catch {
+          playing = false
+          status = 'error'
+        }
+      } else {
+        playing = false
+        status = 'error'
+      }
+      throw e
+    }
   }
 
-  async function playGenome(genome: MusicGenome): Promise<string> {
-    const code = compileGenome(genome)
-    await playCode(code)
-    return code
+  async function playGenome(genome: MusicGenome, mutes?: LayerMutes): Promise<PlayResult> {
+    const code = compileGenome(genome, mutes)
+    return playCode(code)
   }
 
   function stop(): void {
@@ -76,6 +108,7 @@ export function createStrudelPlayer(): StrudelPlayer {
   return {
     status: () => status,
     error: () => error,
+    lastGoodCode: () => lastGood,
     init,
     playGenome,
     playCode,
