@@ -9,10 +9,12 @@ import {
 } from '../music/channels'
 import {
   createEvolutionState,
+  rewindToGeneration,
+  setBookmark,
   type EvolutionState,
 } from '../evolution/engine'
 import { createContinuousController } from '../evolution/continuous'
-import { compileGenome, summarizeGenome } from '../strudel/compiler'
+import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
 import {
   LocalStorageBackend,
@@ -24,8 +26,16 @@ import {
   saveSession,
   type AppSession,
 } from '../persistence/session'
+import { serializeGenome } from '../music/genome'
 
 const storage = new LocalStorageBackend()
+
+const DEFAULT_MUTES: LayerMutes = {
+  drums: false,
+  bass: false,
+  melody: false,
+  chords: false,
+}
 
 function defaultSession(): AppSession {
   return {
@@ -40,7 +50,13 @@ function defaultSession(): AppSession {
 function bootState(channelId: string, seed: number): EvolutionState {
   const channel = getChannel(channelId)
   const existing = loadChannelState(storage, channelId)
-  if (existing) return existing
+  if (existing) {
+    return {
+      ...existing,
+      previousFitness: existing.previousFitness ?? existing.fitness.score,
+      bookmarkIndex: existing.bookmarkIndex ?? null,
+    }
+  }
   return createEvolutionState(channelSeed(channel), seed, {
     personality: channelPersonality(channel),
     channelId,
@@ -61,6 +77,20 @@ function MetricBar({ label, value }: { label: string; value: number }) {
   )
 }
 
+function formatDelta(delta: number): string {
+  if (Math.abs(delta) < 0.0005) return '±0'
+  return `${delta > 0 ? '↑' : '↓'}${Math.abs(delta).toFixed(3)}`
+}
+
+async function copyText(label: string, text: string): Promise<string> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return `copied ${label}`
+  } catch {
+    return `copy failed (${label})`
+  }
+}
+
 export function App() {
   const sessionRef = useRef<AppSession>(loadSession(storage) ?? defaultSession())
   const [channelId, setChannelId] = useState(sessionRef.current.activeChannelId)
@@ -72,19 +102,29 @@ export function App() {
     bootState(sessionRef.current.activeChannelId, sessionRef.current.rngSeed),
   )
   const [playing, setPlaying] = useState(false)
-  const [evolving, setEvolving] = useState(false)
+  const [evolving, setEvolving] = useState(sessionRef.current.evolutionRunning)
   const [audioStatus, setAudioStatus] = useState('idle')
   const [barsLeft, setBarsLeft] = useState(0)
   const [wakeLock, setWakeLock] = useState(false)
+  const [mutes, setMutes] = useState<LayerMutes>({ ...DEFAULT_MUTES })
   const [compiled, setCompiled] = useState(() => compileGenome(state.genome))
   const [log, setLog] = useState<string[]>([])
+  const [toast, setToast] = useState<string | null>(null)
 
   const playerRef = useRef(createStrudelPlayer())
   const stateRef = useRef(state)
+  const mutesRef = useRef(mutes)
   stateRef.current = state
+  mutesRef.current = mutes
 
   const channel = getChannel(channelId)
   const personality = channelPersonality(channel)
+  const fitnessDelta = state.fitness.score - state.previousFitness
+
+  const flash = (msg: string) => {
+    setToast(msg)
+    window.setTimeout(() => setToast(null), 1800)
+  }
 
   const persist = useCallback(
     (next: EvolutionState, sess?: Partial<AppSession>) => {
@@ -105,18 +145,24 @@ export function App() {
 
   const refreshAudio = useCallback(async (genome = stateRef.current.genome) => {
     try {
-      const code = await playerRef.current.playGenome(genome)
-      setCompiled(code)
+      const result = await playerRef.current.playGenome(genome, mutesRef.current)
+      setCompiled(result.code)
       setPlaying(true)
       setAudioStatus(playerRef.current.status())
+      if (result.recovered) {
+        flash('evaluate failed — restored last good pattern')
+        setLog((prev) => ['audio: recovered last good genome', ...prev].slice(0, 20))
+      }
     } catch (e) {
       setAudioStatus('error')
-      setLog((prev) => [`audio error: ${e instanceof Error ? e.message : String(e)}`, ...prev].slice(0, 20))
+      setLog((prev) =>
+        [`audio error: ${e instanceof Error ? e.message : String(e)}`, ...prev].slice(0, 20),
+      )
     }
   }, [])
 
-  const controllerRef = useRef(
-    createContinuousController({
+  const makeController = useCallback(() => {
+    return createContinuousController({
       evolveEveryBars: evolveEvery,
       getTempo: () => stateRef.current.genome.tempo,
       getState: () => stateRef.current,
@@ -130,55 +176,43 @@ export function App() {
           .candidatesPerGeneration,
       }),
       onEvolved: (s, changed) => {
+        const delta = s.fitness.score - s.previousFitness
         setLog((prev) =>
           [
-            `gen ${s.generationIndex}: ${s.lastMutationName} (${s.lastDescription}) fit=${s.fitness.score.toFixed(3)}`,
+            `gen ${s.generationIndex}: ${s.lastMutationName} (${s.lastDescription}) fit=${s.fitness.score.toFixed(3)} ${formatDelta(delta)}`,
             ...prev,
           ].slice(0, 20),
         )
         saveChannelState(storage, sessionRef.current.activeChannelId, s)
+        const code = compileGenome(s.genome, mutesRef.current)
+        setCompiled(code)
         if (changed && playerRef.current.isPlaying()) {
-          void playerRef.current.playGenome(s.genome).then((code) => setCompiled(code))
+          void playerRef.current.playGenome(s.genome, mutesRef.current).then((r) => {
+            setCompiled(r.code)
+            if (r.recovered) flash('evaluate failed — restored last good pattern')
+          })
         }
-        setCompiled(compileGenome(s.genome))
-      },
-    }),
-  )
-
-  // Keep evolve interval in sync
-  useEffect(() => {
-    controllerRef.current.dispose()
-    controllerRef.current = createContinuousController({
-      evolveEveryBars: evolveEvery,
-      getTempo: () => stateRef.current.genome.tempo,
-      getState: () => stateRef.current,
-      setState: (s) => {
-        stateRef.current = s
-        setState(s)
-      },
-      personality: () => channelPersonality(getChannel(sessionRef.current.activeChannelId)),
-      config: () => ({
-        candidatesPerGeneration: getChannel(sessionRef.current.activeChannelId)
-          .candidatesPerGeneration,
-      }),
-      onEvolved: (s, changed) => {
-        setLog((prev) =>
-          [
-            `gen ${s.generationIndex}: ${s.lastMutationName} (${s.lastDescription}) fit=${s.fitness.score.toFixed(3)}`,
-            ...prev,
-          ].slice(0, 20),
-        )
-        saveChannelState(storage, sessionRef.current.activeChannelId, s)
-        if (changed && playerRef.current.isPlaying()) {
-          void playerRef.current.playGenome(s.genome).then((code) => setCompiled(code))
-        }
-        setCompiled(compileGenome(s.genome))
       },
     })
+  }, [evolveEvery])
+
+  const controllerRef = useRef(makeController())
+
+  useEffect(() => {
+    controllerRef.current.dispose()
+    controllerRef.current = makeController()
     if (evolving) controllerRef.current.start()
     return () => controllerRef.current.dispose()
+  }, [makeController, evolving, channelId])
+
+  // Resume evolution flag from session (controller starts via effect above)
+  useEffect(() => {
+    if (sessionRef.current.evolutionRunning) {
+      setEvolving(true)
+    }
+    // once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evolveEvery, channelId])
+  }, [])
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -193,7 +227,17 @@ export function App() {
     persist(state)
   }, [state, persist])
 
+  // Recompile when mutes change; refresh audio if playing
+  useEffect(() => {
+    const code = compileGenome(stateRef.current.genome, mutes)
+    setCompiled(code)
+    if (playerRef.current.isPlaying()) {
+      void playerRef.current.playCode(code)
+    }
+  }, [mutes])
+
   const switchChannel = (id: string) => {
+    const wasEvolving = evolving
     controllerRef.current.stop()
     setEvolving(false)
     playerRef.current.stop()
@@ -202,9 +246,15 @@ export function App() {
     const next = bootState(id, rngSeed)
     stateRef.current = next
     setState(next)
-    setCompiled(compileGenome(next.genome))
-    sessionRef.current = { ...sessionRef.current, activeChannelId: id, evolutionRunning: false }
+    setCompiled(compileGenome(next.genome, mutesRef.current))
+    setMutes({ ...DEFAULT_MUTES })
+    sessionRef.current = {
+      ...sessionRef.current,
+      activeChannelId: id,
+      evolutionRunning: wasEvolving,
+    }
     saveSession(storage, sessionRef.current)
+    if (wasEvolving) setEvolving(true)
   }
 
   const onPlay = async () => {
@@ -219,7 +269,6 @@ export function App() {
 
   const onStartEvolution = () => {
     setEvolving(true)
-    controllerRef.current.start()
     sessionRef.current = { ...sessionRef.current, evolutionRunning: true }
     saveSession(storage, sessionRef.current)
   }
@@ -233,7 +282,7 @@ export function App() {
 
   const onMutate = async () => {
     const next = controllerRef.current.mutateOnce()
-    setCompiled(compileGenome(next.genome))
+    setCompiled(compileGenome(next.genome, mutesRef.current))
     if (playing) await refreshAudio(next.genome)
   }
 
@@ -250,8 +299,10 @@ export function App() {
     })
     stateRef.current = next
     setState(next)
-    setCompiled(compileGenome(next.genome))
+    setCompiled(compileGenome(next.genome, mutesRef.current))
     setLog([])
+    sessionRef.current = { ...sessionRef.current, evolutionRunning: false }
+    saveSession(storage, sessionRef.current)
   }
 
   const onClearAll = () => {
@@ -269,7 +320,59 @@ export function App() {
     stateRef.current = next
     setState(next)
     setCompiled(compileGenome(next.genome))
+    setMutes({ ...DEFAULT_MUTES })
     setLog([])
+  }
+
+  const onBookmark = () => {
+    const next = setBookmark(state, state.generationIndex)
+    stateRef.current = next
+    setState(next)
+    flash(`bookmarked gen ${state.generationIndex}`)
+  }
+
+  const onRewindBookmark = async () => {
+    if (state.bookmarkIndex === null) {
+      flash('no bookmark')
+      return
+    }
+    const next = rewindToGeneration(state, state.bookmarkIndex)
+    if (!next) {
+      flash('bookmark not in history (too old)')
+      return
+    }
+    stateRef.current = next
+    setState(next)
+    setCompiled(compileGenome(next.genome, mutesRef.current))
+    setLog((prev) => [`rewound to gen ${next.generationIndex}`, ...prev].slice(0, 20))
+    if (playing) await refreshAudio(next.genome)
+  }
+
+  const onRewindPrev = async () => {
+    const records = state.history.records
+    const prev = records.length >= 2 ? records[records.length - 2] : null
+    if (!prev) {
+      flash('no previous generation in history')
+      return
+    }
+    const next = rewindToGeneration(state, prev.index)
+    if (!next) return
+    stateRef.current = next
+    setState(next)
+    setCompiled(compileGenome(next.genome, mutesRef.current))
+    if (playing) await refreshAudio(next.genome)
+  }
+
+  const onCopyGenome = async () => {
+    flash(await copyText('genome JSON', serializeGenome(state.genome)))
+  }
+
+  const onCopyStrudel = async () => {
+    flash(await copyText('Strudel', compiled))
+  }
+
+  const toggleMute = (layer: keyof LayerMutes) => {
+    setMutes((m) => ({ ...m, [layer]: !m[layer] }))
   }
 
   const m = state.fitness.metrics
@@ -279,6 +382,7 @@ export function App() {
       <header>
         <h1>Evolutionary Strudel</h1>
         <p className="tagline">Autonomous generative music — genome → mutate → select → play</p>
+        {toast && <p className="toast">{toast}</p>}
       </header>
 
       <section className="controls">
@@ -333,6 +437,21 @@ export function App() {
         <button type="button" onClick={() => void onMutate()}>
           Mutate
         </button>
+        <button type="button" onClick={onBookmark}>
+          Bookmark
+        </button>
+        <button type="button" onClick={() => void onRewindBookmark()}>
+          Rewind bookmark
+        </button>
+        <button type="button" onClick={() => void onRewindPrev()}>
+          Rewind prev
+        </button>
+        <button type="button" onClick={() => void onCopyGenome()}>
+          Copy genome
+        </button>
+        <button type="button" onClick={() => void onCopyStrudel()}>
+          Copy Strudel
+        </button>
         <button type="button" onClick={onResetChannel}>
           Reset channel
         </button>
@@ -341,8 +460,33 @@ export function App() {
         </button>
       </section>
 
+      <section className="mutes">
+        <span className="mutes-label">Mute layers</span>
+        {(['drums', 'bass', 'melody', 'chords'] as const).map((layer) => (
+          <label key={layer} className="mute-toggle">
+            <input
+              type="checkbox"
+              checked={Boolean(mutes[layer])}
+              onChange={() => toggleMute(layer)}
+            />
+            {layer}
+          </label>
+        ))}
+      </section>
+
+      <section className="now-playing">
+        <strong>Now</strong>
+        <span>
+          gen {state.generationIndex} · {state.lastMutationName}
+        </span>
+        <span className={fitnessDelta >= 0 ? 'delta-up' : 'delta-down'}>
+          fit {state.fitness.score.toFixed(3)} {formatDelta(fitnessDelta)}
+        </span>
+        <span>{state.lastDescription}</span>
+      </section>
+
       <section className="status">
-        <div>Audio: {audioStatus}</div>
+        <div>Audio: {audioStatus}{playing ? '' : ''}</div>
         <div>Evolution: {evolving ? 'ON' : 'OFF'}</div>
         <div>Bars left: {barsLeft}</div>
         <div>Wake lock: {wakeLock ? 'active' : 'off'}</div>
@@ -352,7 +496,15 @@ export function App() {
         <div>
           Scale: {state.genome.scale.root} / {state.genome.scale.mode}
         </div>
-        <div>Fitness: {state.fitness.score.toFixed(3)}</div>
+        <div>
+          Fitness: {state.fitness.score.toFixed(3)}{' '}
+          <span className={fitnessDelta >= 0 ? 'delta-up' : 'delta-down'}>
+            {formatDelta(fitnessDelta)}
+          </span>
+        </div>
+        <div>
+          Bookmark: {state.bookmarkIndex === null ? 'none' : `gen ${state.bookmarkIndex}`}
+        </div>
         <div>Pattern: {summarizeGenome(state.genome)}</div>
       </section>
 
@@ -380,8 +532,8 @@ export function App() {
 
       <footer>
         <p>
-          Tip: leave this tab audible for long runs. True multi-day daemons need Electron/Tauri —
-          browsers throttle background tabs.
+          Tip: leave this tab audible for long runs. Browsers throttle background tabs — keep the
+          page visible if you want continuous evolution.
         </p>
       </footer>
     </div>
