@@ -32,6 +32,22 @@ export const DEFAULT_SELECTION_CONFIG: SelectionConfig = {
 }
 
 /**
+ * Raise exploration budget as stagnation grows (before force-accept kicks in).
+ * Same seed + streak ⇒ same effective config (deterministic).
+ */
+export function selectionWithStagnation(
+  config: SelectionConfig,
+  stagnationStreak: number,
+): SelectionConfig {
+  const t = Math.min(1, stagnationStreak / Math.max(1, config.stagnationLimit))
+  return {
+    ...config,
+    exploreWorseProbability: Math.min(0.85, config.exploreWorseProbability + t * 0.45),
+    exploreWorseMargin: Math.min(0.25, config.exploreWorseMargin + t * 0.12),
+  }
+}
+
+/**
  * Select next parent from candidates.
  * Prefers higher fitness; occasionally accepts slightly worse (exploration).
  * Anti-stagnation: after N unchanged steps, force-accept best experimental mutant.
@@ -58,6 +74,7 @@ export function selectSurvivor(
     }
   }
 
+  const effective = selectionWithStagnation(config, stagnationStreak)
   const sorted = [...candidates].sort((a, b) => b.fitness - a.fitness)
   const best = sorted[0]!
 
@@ -65,26 +82,21 @@ export function selectSurvivor(
     options?.forceAccept === true || stagnationStreak >= config.stagnationLimit
 
   if (forceAccept) {
-    // Prefer the best candidate that actually differs from parent
-    const different =
-      sorted.find((c) => !genomesEqual(c.genome, parent)) ?? best
+    const different = sorted.find((c) => !genomesEqual(c.genome, parent)) ?? best
     return { winner: different, forceAccepted: true, exploredWorse: false }
   }
 
-  // Default: take best if better or equal
   if (best.fitness >= parentFitness) {
     return { winner: best, forceAccepted: false, exploredWorse: false }
   }
 
-  // Exploration: occasionally accept slightly worse
   if (
-    parentFitness - best.fitness <= config.exploreWorseMargin &&
-    rng.chance(config.exploreWorseProbability)
+    parentFitness - best.fitness <= effective.exploreWorseMargin &&
+    rng.chance(effective.exploreWorseProbability)
   ) {
     return { winner: best, forceAccepted: false, exploredWorse: true }
   }
 
-  // Keep parent (represented as a synthetic candidate)
   return {
     winner: {
       genome: parent,

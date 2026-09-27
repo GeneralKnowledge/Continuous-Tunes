@@ -18,6 +18,14 @@ const VOICING_INTERVALS = {
   power: [0, 4],
 } as const
 
+/** UI mutes — do not alter the genome, only compilation. */
+export interface LayerMutes {
+  drums?: boolean
+  bass?: boolean
+  melody?: boolean
+  chords?: boolean
+}
+
 function degreeToPc(root: number, mode: ScaleMode, degree: number): number {
   const intervals = MODE_INTERVALS[mode]
   const idx = ((degree % intervals.length) + intervals.length) % intervals.length
@@ -30,11 +38,9 @@ function noteName(pc: number, octave: number): string {
 
 function scaleDegreeNote(genome: MusicGenome, degree: number, octave: number): string {
   const pc = degreeToPc(genome.scale.root, genome.scale.mode, degree)
-  // Pentatonic only has 5 degrees — wrap octave on overflow already handled by %
   return noteName(pc, octave)
 }
 
-/** Mini-notation: hit = sound token, rest = ~ */
 function boolToMini(steps: boolean[], hit: string): string {
   return steps.map((on) => (on ? hit : '~')).join(' ')
 }
@@ -55,14 +61,11 @@ function chordNotesMini(genome: MusicGenome): string {
     const intervals = VOICING_INTERVALS[voicing]
     const chordTones = intervals.map((degOff) => {
       const deg = rootDeg + degOff
-      // Map through scale length
       const intervalsMode = MODE_INTERVALS[genome.scale.mode]
       const octBoost = Math.floor(deg / intervalsMode.length)
       const d = ((deg % intervalsMode.length) + intervalsMode.length) % intervalsMode.length
       return scaleDegreeNote(genome, d, 3 + octBoost)
     })
-    // One chord event per bar — pad rests for remaining steps
-    // Use bracket chord for simultaneous notes
     const chordToken = `[${chordTones.join(',')}]`
     for (let s = 0; s < stepsPerBar; s++) {
       const global = bar * stepsPerBar + s
@@ -76,15 +79,25 @@ function chordNotesMini(genome: MusicGenome): string {
   return tokens.join(' ')
 }
 
+function layerOn(
+  genome: MusicGenome,
+  layer: keyof MusicGenome['activeLayers'],
+  mutes?: LayerMutes,
+): boolean {
+  if (!genome.activeLayers[layer]) return false
+  if (mutes?.[layer]) return false
+  return true
+}
+
 /**
  * Compile a MusicGenome into executable Strudel code.
  * THIS IS THE ONLY MODULE THAT KNOWS STRUDEL SYNTAX.
  */
-export function compileGenome(genome: MusicGenome): string {
-  const cps = genome.tempo / 60 / 4 // 1 cycle = 1 bar of 4 beats
+export function compileGenome(genome: MusicGenome, mutes?: LayerMutes): string {
+  const cps = genome.tempo / 60 / 4
   const layers: string[] = []
 
-  if (genome.activeLayers.drums) {
+  if (layerOn(genome, 'drums', mutes)) {
     const kick = boolToMini(genome.drums.kick, 'bd')
     const snare = boolToMini(genome.drums.snare, 'sd')
     const hihat = boolToMini(genome.drums.hihat, 'hh')
@@ -93,30 +106,28 @@ export function compileGenome(genome: MusicGenome): string {
     layers.push(`  s("${hihat}").gain(0.55)`)
   }
 
-  if (genome.activeLayers.bass) {
+  if (layerOn(genome, 'bass', mutes)) {
     const mini = notesToMini(genome, genome.bass.notes, genome.bass.octave)
     layers.push(`  note("${mini}").sound("sawtooth").lpf(800).gain(0.7)`)
   }
 
-  if (genome.activeLayers.melody) {
+  if (layerOn(genome, 'melody', mutes)) {
     const mini = notesToMini(genome, genome.melody.notes, genome.melody.octave)
     layers.push(`  note("${mini}").sound("triangle").gain(0.55)`)
   }
 
-  if (genome.activeLayers.chords) {
+  if (layerOn(genome, 'chords', mutes)) {
     const mini = chordNotesMini(genome)
     layers.push(`  note("${mini}").sound("sawtooth").lpf(1200).gain(0.35).room(0.3)`)
   }
 
   if (layers.length === 0) {
-    // Silence pattern — still valid Strudel
     layers.push(`  s("~")`)
   }
 
   const swing = genome.parameters.swing
   let body = `stack(\n${layers.join(',\n')}\n)`
   if (swing > 0.01) {
-    // swingBy(amount, subdivision) — amount ~0–1, subdivision often 16
     body = `${body}.swingBy(${swing.toFixed(3)}, 16)`
   }
 

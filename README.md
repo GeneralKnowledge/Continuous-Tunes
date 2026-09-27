@@ -111,9 +111,20 @@ Each channel persists its own lineage in `localStorage`. Switching resumes that 
 - Deadline-based polling (not fragile per-bar `setInterval` alone)
 - Screen **Wake Lock** while evolving
 - Re-schedule on `visibilitychange`
-- **Browser limit:** leave the tab audible. True multi-day daemons need Electron/Tauri later.
+- If `evaluate` fails: hush + retry last good pattern
+- Evolution ON flag persists across refresh
+- **Browser limit:** leave the tab audible and preferably visible — browsers throttle background tabs
 
 Verified against `@strudel/web@1.3.0`: `initStrudel({ prebake: () => samples('github:tidalcycles/dirt-samples') })`, `evaluate`, `hush`.
+
+## Easy UX extras
+
+- **Now-playing strip** with last mutation + fitness delta ↑/↓
+- **Mute layers** (playback only — genome unchanged)
+- **Copy genome JSON / Strudel code**
+- **Bookmark** a generation + rewind (within bounded history)
+- **Anti-plateau:** rising exploration + more experimental mutations as stagnation grows
+- **Channel fingerprints** (e.g. House four-on-floor, Ambient sparse drums)
 
 ## How to run
 

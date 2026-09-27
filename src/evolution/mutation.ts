@@ -115,6 +115,28 @@ export function pickIntensity(rng: Rng, config: MutationConfig): MutationIntensi
   return 'experimental'
 }
 
+/**
+ * Shift intensity toward moderate/experimental as stagnation rises
+ * so long runs don't freeze on tiny tweaks.
+ */
+export function intensityWithStagnation(
+  config: MutationConfig,
+  stagnationStreak: number,
+  stagnationLimit = 8,
+): MutationConfig {
+  const t = Math.min(1, stagnationStreak / Math.max(1, stagnationLimit))
+  const { small, moderate, experimental } = config.intensityProbabilities
+  const shift = t * 0.35
+  return {
+    ...config,
+    intensityProbabilities: {
+      small: Math.max(0.15, small - shift),
+      moderate: moderate + shift * 0.4,
+      experimental: experimental + shift * 0.6,
+    },
+  }
+}
+
 // ─── Mutation operators ───────────────────────────────────────────────
 
 export const MUTATION_OPS: MutationOp[] = [
@@ -418,6 +440,48 @@ export const MUTATION_OPS: MutationOp[] = [
     },
   },
   {
+    name: 'AddDrumFill',
+    category: 'rhythm',
+    minIntensity: 'moderate',
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const spb = g.stepsPerBar
+      const bar = rng.int(0, g.bars - 1)
+      const start = bar * spb + Math.floor(spb * 0.75)
+      for (let i = start; i < (bar + 1) * spb; i++) {
+        if (rng.chance(0.55)) g.drums.hihat[i] = true
+        if (rng.chance(0.35)) g.drums.snare[i] = true
+      }
+      return {
+        genome: g,
+        mutationName: 'AddDrumFill',
+        description: `fill bar ${bar}`,
+      }
+    },
+  },
+  {
+    name: 'EchoBassNote',
+    category: 'bass',
+    minIntensity: 'small',
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const filled = g.bass.notes
+        .map((v, i) => (v !== null ? i : -1))
+        .filter((i) => i >= 0)
+      if (filled.length === 0) return null
+      const i = rng.pick(filled)
+      const gap = rng.int(1, 3)
+      const j = i + gap
+      if (j >= g.bass.notes.length) return null
+      g.bass.notes[j] = g.bass.notes[i]
+      return {
+        genome: g,
+        mutationName: 'EchoBassNote',
+        description: `echo bass ${i}→${j}`,
+      }
+    },
+  },
+  {
     name: 'RestructureLength',
     category: 'layers',
     minIntensity: 'experimental',
@@ -435,7 +499,6 @@ export const MUTATION_OPS: MutationOp[] = [
       g.bass.notes = resizeNotes(g.bass.notes, n)
       g.melody.notes = resizeNotes(g.melody.notes, n)
       g.chords.rhythm = resizeBool(g.chords.rhythm, n)
-      // Resize progression
       const prog = g.chords.progression.slice(0, newBars)
       while (prog.length < newBars) prog.push(rng.int(0, 5))
       g.chords.progression = prog
