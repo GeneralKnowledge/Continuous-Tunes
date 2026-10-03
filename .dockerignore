@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+.git
+.gitignore
+*.md
+tests
+scripts
+.cursor
+.vscode
+.idea
+*.log
+coverage
+.env
+.env.*
