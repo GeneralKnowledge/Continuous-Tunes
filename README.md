@@ -138,6 +138,28 @@ npm run dev
 
 Then open the Vite URL → **Play** → **Start evolution**.
 
+## Deploy with Docker
+
+The app is a static SPA. Docker builds the Vite bundle and serves it with nginx. Audio still runs in the visitor’s browser (`@strudel/web`); the container only hosts the HTML/JS/CSS.
+
+```bash
+# Build & run on port 8080 (override with PORT=…)
+docker compose up --build -d
+
+# Or without compose:
+docker build -t evolutionary-strudel .
+docker run --rm -p 8080:80 evolutionary-strudel
+```
+
+Open `http://your-server:8080` → **Play** → **Start evolution**.
+
+Health check: `GET /healthz` → `ok`
+
+**Notes for production**
+- Put this behind your reverse proxy (Caddy / nginx / Traefik) if you want HTTPS / a domain.
+- Browsers still fetch dirt-samples from GitHub at runtime — outbound network from clients is required for drums to load.
+- State lives in each browser’s `localStorage` (not on the server).
+
 ## Add a mutation
 
 1. Add an op to `MUTATION_OPS` in `src/evolution/mutation.ts`
