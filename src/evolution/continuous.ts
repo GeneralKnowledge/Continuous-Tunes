@@ -20,8 +20,8 @@ export interface ContinuousControllerOptions {
   config?: () => Partial<EvolutionConfig> | undefined
   /** Injected clock for tests. */
   now?: () => number
-  setTimeoutFn?: typeof setTimeout
-  clearTimeoutFn?: typeof clearTimeout
+  setTimeoutFn?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
+  clearTimeoutFn?: (id: ReturnType<typeof setTimeout>) => void
 }
 
 export interface ContinuousController {

@@ -73,6 +73,21 @@ describe('Rewind & bookmark', () => {
     expect(rewound!.genome.tempo).toBe(target.genome.tempo)
   })
 
+  it('keeps generation numbers unique after rewinding and evolving again', () => {
+    const opts = { config: { candidatesPerGeneration: 4, historySize: 64 } }
+    let state = runGenerations(createEvolutionState(getSeed('electronic'), 3), 10, opts)
+    state = setBookmark(state, 8)
+    state = rewindToGeneration(state, 4)!
+    expect(state.bookmarkIndex).toBeNull()
+    state = setBookmark(state, 3)
+    state = runGenerations(state, 6, opts)
+    const indices = state.history.records.map((r) => r.index)
+    expect(new Set(indices).size).toBe(indices.length)
+    expect(state.generationIndex).toBe(10)
+    const back = rewindToGeneration(state, 3)!
+    expect(back.genome).toEqual(state.history.records.find((r) => r.index === 3)!.genome)
+  })
+
   it('setBookmark stores index', () => {
     const state = createEvolutionState(getSeed('minimal'), 1)
     const booked = setBookmark(state, 0)

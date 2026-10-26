@@ -2,7 +2,7 @@
 
 A browser prototype of an **autonomous generative music system**. Music is a structured genome that mutates, gets scored by simple musical heuristics, and plays through [Strudel](https://strudel.cc) in the browser.
 
-This is **not** an AI music generator. No LLM, ML model, backend, Docker, auth, or cloud database.
+This is **not** an AI music generator. No LLM, ML model, backend, auth, or cloud database.
 
 ## Why
 
@@ -122,7 +122,8 @@ Verified against `@strudel/web@1.3.0`: `initStrudel({ prebake: () => samples('gi
 - **Now-playing strip** with last mutation + fitness delta ↑/↓
 - **Mute layers** (playback only — genome unchanged)
 - **Copy genome JSON / Strudel code**
-- **Bookmark** a generation + rewind (within bounded history)
+- **Bookmark** a generation + rewind (within bounded history; rewinding drops the later generations)
+- **RNG seed** box reseeds the current lineage's randomness without resetting the genome
 - **Anti-plateau:** rising exploration + more experimental mutations as stagnation grows
 - **Channel fingerprints** (e.g. House four-on-floor, Ambient sparse drums)
 
@@ -131,6 +132,8 @@ Verified against `@strudel/web@1.3.0`: `initStrudel({ prebake: () => samples('gi
 ```bash
 npm install
 npm test
+npm run typecheck   # app, tests and scripts
+npm run lint
 npm run evolve 200 42
 npm run evolve 100 7 ambient
 npm run dev
@@ -140,7 +143,7 @@ Then open the Vite URL → **Play** → **Start evolution**.
 
 ## Deploy with Docker
 
-The app is a static SPA. Docker builds the Vite bundle and serves it with nginx. Audio still runs in the visitor’s browser (`@strudel/web`); the container only hosts the HTML/JS/CSS.
+The app is a static SPA. Docker builds the Vite bundle and serves the static files with busybox `httpd` on port 8080 (no TLS or extra headers — put your own proxy/tunnel in front). Audio still runs in the visitor’s browser (`@strudel/web`); the container only hosts the HTML/JS/CSS.
 
 ```bash
 # Build & run on port 8080 (override with PORT=…)
@@ -148,17 +151,17 @@ docker compose up --build -d
 
 # Or without compose:
 docker build -t evolutionary-strudel .
-docker run --rm -p 8080:80 evolutionary-strudel
+docker run --rm -p 8080:8080 evolutionary-strudel
 ```
 
 Open `http://your-server:8080` → **Play** → **Start evolution**.
 
-Health check: `GET /healthz` → `ok`
-
 **Notes for production**
-- Put this behind your reverse proxy (Caddy / nginx / Traefik) if you want HTTPS / a domain.
+- Put this behind your own reverse proxy or tunnel if you want HTTPS / a domain.
 - Browsers still fetch dirt-samples from GitHub at runtime — outbound network from clients is required for drums to load.
 - State lives in each browser’s `localStorage` (not on the server).
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and the production build on every push and pull request.
 
 ## Add a mutation
 

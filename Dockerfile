@@ -1,5 +1,6 @@
-# Multi-stage build: compile the Vite React app, serve with nginx.
+# Multi-stage build: compile the Vite React app, serve the static files with busybox httpd.
 # The music engine runs entirely in the browser (@strudel/web) — no Node runtime needed in production.
+# TLS, headers and public exposure are left to whatever sits in front of this container.
 
 # ---- build ----
 FROM node:22-alpine AS build
@@ -15,14 +16,14 @@ COPY src ./src
 RUN npm run build
 
 # ---- serve ----
-FROM nginx:1.27-alpine AS runtime
+FROM busybox:1.37 AS runtime
 
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/dist /www
 
-EXPOSE 80
+USER nobody
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1
+  CMD wget -qO /dev/null http://127.0.0.1:8080/ || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["httpd", "-f", "-v", "-p", "8080", "-h", "/www"]

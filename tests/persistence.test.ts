@@ -24,6 +24,28 @@ describe('Persistence', () => {
     expect(loaded!.rngState).toBe(state.rngState)
   })
 
+  it('rejects a saved channel whose genome is corrupt', () => {
+    const backend = new MemoryStorage()
+    const state = createEvolutionState(getSeed('electronic'), 42, { channelId: 'electronic' })
+    saveChannelState(backend, 'electronic', state)
+    const snap = JSON.parse(backend.getItem('channel:electronic')!)
+    snap.state.genome.bass.octave = '1"); alert(1); ("'
+    backend.setItem('channel:electronic', JSON.stringify(snap))
+    expect(loadChannelState(backend, 'electronic')).toBeNull()
+  })
+
+  it('rejects a saved session pointing at an unknown channel', () => {
+    const backend = new MemoryStorage()
+    saveSession(backend, {
+      version: 1,
+      activeChannelId: 'no-such-channel',
+      rngSeed: 1,
+      evolveEveryBars: 8,
+      evolutionRunning: false,
+    })
+    expect(loadSession(backend)).toBeNull()
+  })
+
   it('saves and restores session', () => {
     const backend = new MemoryStorage()
     saveSession(backend, {
@@ -72,9 +94,9 @@ describe('Continuous controller', () => {
       now: () => clock,
       setTimeoutFn: (fn, ms) =>
         setTimeout(() => {
-          clock += typeof ms === 'number' ? ms : 0
-          if (typeof fn === 'function') fn()
-        }, ms) as unknown as ReturnType<typeof setTimeout>,
+          clock += ms
+          fn()
+        }, ms),
       clearTimeoutFn: clearTimeout,
     })
 

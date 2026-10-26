@@ -1,8 +1,8 @@
 /**
  * Browser Strudel player.
  * Verified against @strudel/web@1.3.0: initStrudel, evaluate, hush, samples.
+ * @strudel/web is loaded lazily on first play so it stays out of the initial bundle.
  */
-import { initStrudel, evaluate, hush, samples } from '@strudel/web'
 import { compileGenome, type LayerMutes } from './compiler'
 import type { MusicGenome } from '../music/genome'
 
@@ -24,7 +24,10 @@ export interface StrudelPlayer {
   isPlaying: () => boolean
 }
 
+type StrudelModule = typeof import('@strudel/web')
+
 export function createStrudelPlayer(): StrudelPlayer {
+  let strudel: StrudelModule | null = null
   let status: PlayerStatus = 'idle'
   let error: string | null = null
   let playing = false
@@ -38,11 +41,13 @@ export function createStrudelPlayer(): StrudelPlayer {
     status = 'loading'
     initPromise = (async () => {
       try {
-        await initStrudel({
+        const mod = await import('@strudel/web')
+        await mod.initStrudel({
           prebake: async () => {
-            await samples('github:tidalcycles/dirt-samples')
+            await mod.samples('github:tidalcycles/dirt-samples')
           },
         })
+        strudel = mod
         status = 'ready'
         error = null
       } catch (e) {
@@ -58,6 +63,7 @@ export function createStrudelPlayer(): StrudelPlayer {
 
   async function playCode(code: string): Promise<PlayResult> {
     await init()
+    const { evaluate, hush } = strudel!
     try {
       await evaluate(code)
       lastGood = code
@@ -97,7 +103,7 @@ export function createStrudelPlayer(): StrudelPlayer {
 
   function stop(): void {
     try {
-      hush()
+      strudel?.hush()
     } catch {
       // hush before init is harmless to ignore
     }
