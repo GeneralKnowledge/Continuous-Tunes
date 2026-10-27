@@ -257,6 +257,10 @@ footer {
   border-radius: 4px;
 }
 
+.song-strip li.contrast {
+  border-style: dashed;
+}
+
 .song-strip li.current {
   color: var(--fg);
   border-color: var(--accent);

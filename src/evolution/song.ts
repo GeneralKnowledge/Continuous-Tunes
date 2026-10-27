@@ -1,7 +1,9 @@
 /**
- * Songs: one theme genome played through a genre form. Each section boundary gets one
- * evolution step (tempo and key frozen inside a song); between songs evolution runs freely.
+ * Songs: a theme (A) and contrast material (B) played through a genre form. The theme gets one
+ * evolution step at each section boundary (tempo and key frozen inside a song); drops, peaks and
+ * choruses play B, derived from the theme when the song starts. Between songs evolution runs freely.
  */
+import { contrastMetrics, deriveContrast, varyContrast } from './contrast'
 import { stepGeneration, type EvolutionConfig, type EvolutionState } from './engine'
 import { DEFAULT_MUTATION_CONFIG, type MutationConfig } from './mutation'
 import { planForm, type SongLength, type SongTemplate } from '../music/form'
@@ -15,6 +17,9 @@ export interface ComposeOptions {
   config?: Partial<EvolutionConfig>
   now?: number
 }
+
+/** Sections that play the contrast material. */
+export const CONTRAST_ROLES: ReadonlySet<string> = new Set(['drop', 'peak', 'chorus'])
 
 export interface ComposedSong {
   sections: SongSection[]
@@ -39,11 +44,21 @@ export function composeSong(state: EvolutionState, options: ComposeOptions): Com
       mutation: inSongMutation(options.config?.mutation ?? DEFAULT_MUTATION_CONFIG),
     },
   }
+  // B comes from its own seed so the theme's lineage is unchanged by it
+  const seed = (state.rngState ^ 0x9e3779b9) >>> 0
+  let contrast = deriveContrast(state.genome, seed, { personality: options.personality }).genome
+  let contrastUses = 0
   let current = state
   const sections: SongSection[] = []
   form.forEach((section, i) => {
     if (i > 0) current = stepGeneration(current, stepOptions).state
-    sections.push({ ...section, genome: current.genome })
+    if (CONTRAST_ROLES.has(section.role)) {
+      if (contrastUses > 0) contrast = varyContrast(contrast, seed + i, options.personality)
+      contrastUses++
+      sections.push({ ...section, genome: contrast, material: 'B' })
+    } else {
+      sections.push({ ...section, genome: current.genome, material: 'A' })
+    }
   })
   return { sections, startGeneration: state.generationIndex, state: current }
 }
@@ -56,6 +71,54 @@ export function composeNextSong(state: EvolutionState, options: ComposeOptions):
     now: options.now,
   }).state
   return composeSong(next, options)
+}
+
+export interface SongScore {
+  /** How well B contrasts with the theme it was derived from (0–1). */
+  contrast: number
+  /** The energy rises to its peak on contrast material and comes back down at the end (0–1). */
+  energyShape: number
+  /** Whole phrases, an intro and an outro (0–1). */
+  form: number
+  score: number
+}
+
+/** Song-level score on top of the per-genome fitness. */
+export function evaluateSong(sections: readonly SongSection[]): SongScore {
+  // B is derived from the theme the song starts with
+  const theme = sections.find((s) => s.material !== 'B')?.genome
+  const contrasts = theme
+    ? sections.filter((s) => s.material === 'B').map((s) => contrastMetrics(theme, s.genome).score)
+    : []
+  const contrast = contrasts.length ? contrasts.reduce((a, b) => a + b, 0) / contrasts.length : 0
+
+  const energy = (s: SongSection) => Math.max(s.energy, s.energyEnd ?? s.energy)
+  const peak = Math.max(...sections.map(energy))
+  const peakIndex = sections.findIndex((s) => energy(s) === peak)
+  const first = sections[0]
+  const last = sections[sections.length - 1]
+  const shapeChecks = [
+    sections[peakIndex]?.material === 'B',
+    peakIndex > 0,
+    first !== undefined && energy(first) < peak,
+    last !== undefined && (last.energyEnd ?? last.energy) < peak,
+  ]
+  const energyShape = shapeChecks.filter(Boolean).length / shapeChecks.length
+
+  const formChecks = [
+    sections.length > 0 && sections.every((s) => s.bars >= 4 && s.bars % 4 === 0),
+    first?.role === 'intro',
+    last?.role === 'outro',
+  ]
+  const form = formChecks.filter(Boolean).length / formChecks.length
+
+  const score = (contrast + energyShape + form) / 3
+  return {
+    contrast: Number(contrast.toFixed(3)),
+    energyShape: Number(energyShape.toFixed(3)),
+    form: Number(form.toFixed(3)),
+    score: Number(score.toFixed(3)),
+  }
 }
 
 /** Where a cycle falls inside a scheduled song. */

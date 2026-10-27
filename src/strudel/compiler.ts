@@ -100,6 +100,8 @@ export interface SongSection {
   energy: number
   energyEnd?: number
   genome: MusicGenome
+  /** Theme (A) or contrast material (B, drops and choruses). */
+  material?: 'A' | 'B'
 }
 
 /** A song placed on the timeline, starting at an absolute cycle (1 cycle = 1 bar at the base tempo). */
