@@ -2,6 +2,7 @@
  * Song forms: which sections a song has, how long each is relative to the others,
  * and how much energy each carries. One theme genome is rendered at each section's energy.
  */
+import type { Rng } from '../lib/rng'
 
 export const SECTION_ROLES = [
   'intro',
@@ -171,4 +172,83 @@ export function planForm(template: SongTemplate, tempo: number, length: SongLeng
     energy: s.energy,
     ...(s.energyEnd !== undefined ? { energyEnd: s.energyEnd } : {}),
   }))
+}
+
+/** The sections a song builds towards; they play the contrast material. */
+export const HIGHLIGHT_ROLES: ReadonlySet<SectionRole> = new Set<SectionRole>(['drop', 'peak', 'chorus'])
+
+const formBars = (form: readonly PlannedSection[]) => form.reduce((a, s) => a + s.bars, 0)
+
+/** Intro first, outro last, every build leads into a highlight, and at least one highlight. */
+function formHolds(form: readonly PlannedSection[], targetBars: number): boolean {
+  const total = formBars(form)
+  return (
+    form[0]?.role === 'intro' &&
+    form[form.length - 1]?.role === 'outro' &&
+    form.some((s) => HIGHLIGHT_ROLES.has(s.role)) &&
+    form.every((s, i) => s.role !== 'build' || HIGHLIGHT_ROLES.has(form[i + 1]?.role as SectionRole)) &&
+    total >= targetBars * 0.75 &&
+    total <= targetBars * 1.35
+  )
+}
+
+const round = (x: number) => Number(x.toFixed(2))
+
+/**
+ * A variation on a planned form for the next song, inside the genre's template: a section
+ * stretched or trimmed by a phrase, repeated or left out, or its energy nudged.
+ * Intro, outro and the builds into highlights stay. Returns the new form and what changed.
+ */
+export function varyForm(
+  form: readonly PlannedSection[],
+  rng: Rng,
+  changes = 1,
+): { form: PlannedSection[]; changes: string[] } {
+  const target = formBars(form)
+  let out = form.map((s) => ({ ...s }))
+  const done: string[] = []
+  for (let attempt = 0; attempt < 24 && done.length < changes; attempt++) {
+    const middle = out.map((_, i) => i).filter((i) => i > 0 && i < out.length - 1)
+    if (middle.length === 0) break
+    const i = rng.pick(middle)
+    const sec = out[i]!
+    const label = SECTION_LABELS[sec.role].toLowerCase()
+    const next = out.map((s) => ({ ...s }))
+    let change = ''
+    switch (rng.pick(['stretch', 'trim', 'repeat', 'drop', 'energy'] as const)) {
+      case 'stretch':
+        if (sec.role === 'build' || sec.bars >= 32) continue
+        next[i]!.bars += 4
+        change = `longer ${label}`
+        break
+      case 'trim':
+        if (sec.bars < 8) continue
+        next[i]!.bars -= 4
+        change = `shorter ${label}`
+        break
+      case 'repeat':
+        if (sec.role === 'build') continue
+        next.splice(i + 1, 0, { ...sec })
+        change = `extra ${label}`
+        break
+      case 'drop':
+        if (HIGHLIGHT_ROLES.has(sec.role) || sec.role === 'build' || out.length <= 4) continue
+        next.splice(i, 1)
+        change = `no ${label}`
+        break
+      case 'energy': {
+        if (sec.role === 'build' || sec.energyEnd !== undefined) continue
+        const [lo, hi] = HIGHLIGHT_ROLES.has(sec.role) ? [0.7, 1] : [0.15, 0.8]
+        const e = round(Math.max(lo, Math.min(hi, sec.energy + (rng.chance(0.5) ? 0.1 : -0.1))))
+        if (e === sec.energy) continue
+        next[i]!.energy = e
+        change = `${e > sec.energy ? 'busier' : 'calmer'} ${label}`
+        break
+      }
+    }
+    if (!formHolds(next, target)) continue
+    out = next
+    done.push(change)
+  }
+  return { form: out, changes: done }
 }

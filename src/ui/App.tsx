@@ -18,7 +18,14 @@ import {
 } from '../evolution/engine'
 import { evaluateFitness } from '../evolution/fitness'
 import { evaluateSong } from '../evolution/song'
-import { createSongController, type NowPlaying, type SongController } from '../evolution/songs'
+import {
+  addToHistory,
+  createSongController,
+  songRecord,
+  type NowPlaying,
+  type SongController,
+  type SongRecord,
+} from '../evolution/songs'
 import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
 import {
@@ -27,8 +34,10 @@ import {
   clearChannel,
   loadChannelState,
   loadSession,
+  loadSongHistory,
   saveChannelState,
   saveSession,
+  saveSongHistory,
   type AppSession,
 } from '../persistence/session'
 import { serializeGenome } from '../music/genome'
@@ -93,6 +102,15 @@ function formatDelta(delta: number): string {
   return `${delta > 0 ? '↑' : '↓'}${Math.abs(delta).toFixed(3)}`
 }
 
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+const SECTION_INITIALS: Record<string, string> = { breakdown: 'Bd', build: 'Bu' }
+
+/** "I G Bu D Bd Bu D O": one or two letters per section. */
+function formSummary(form: SongRecord['form']): string {
+  return form.map((s) => SECTION_INITIALS[s.role] ?? s.role[0]!.toUpperCase()).join(' ')
+}
+
 async function copyText(label: string, text: string): Promise<string> {
   try {
     await navigator.clipboard.writeText(text)
@@ -120,16 +138,27 @@ export function App() {
   const [compiled, setCompiled] = useState(() => compileGenome(state.genome, undefined, kitFor(initialSession.activeChannelId)))
   const [log, setLog] = useState<string[]>([])
   const [toast, setToast] = useState<string | null>(null)
+  const [history, setHistory] = useState<SongRecord[]>(() =>
+    loadSongHistory(storage, storageIdFor(initialSession.activeChannelId)),
+  )
 
   const playerRef = useRef(createStrudelPlayer())
   const stateRef = useRef(state)
   const mutesRef = useRef(mutes)
   const songLengthRef = useRef(songLength)
+  const historyRef = useRef(history)
   useLayoutEffect(() => {
     stateRef.current = state
     mutesRef.current = mutes
     songLengthRef.current = songLength
-  }, [state, mutes, songLength])
+    historyRef.current = history
+  }, [state, mutes, songLength, history])
+
+  const updateHistory = useCallback((next: SongRecord[], channel = sessionRef.current.activeChannelId) => {
+    historyRef.current = next
+    setHistory(next)
+    saveSongHistory(storage, storageIdFor(channel), next)
+  }, [])
 
   const channel = getChannel(channelId)
   const personality = channelPersonality(channel)
@@ -213,17 +242,20 @@ export function App() {
         onComposed: (song, s) => {
           const bars = song.sections.reduce((a, x) => a + x.bars, 0)
           const score = evaluateSong(song.sections)
+          const changes = song.formChanges.length ? `, form: ${song.formChanges.join(', ')}` : ''
           setLog((prev) =>
             [
-              `song ${song.number}: ${song.sections.length} sections, ${bars} bars, gens ${song.startGeneration}–${s.generationIndex}, fit=${s.fitness.score.toFixed(3)}, song=${score.score.toFixed(2)} (contrast ${score.contrast.toFixed(2)})`,
+              `song ${song.number}: ${song.sections.length} sections, ${bars} bars, gens ${song.startGeneration}–${s.generationIndex}, fit=${s.fitness.score.toFixed(3)}, song=${score.score.toFixed(2)} (contrast ${score.contrast.toFixed(2)})${changes}`,
               ...prev,
             ].slice(0, 20),
           )
           saveChannelState(storage, storageIdFor(sessionRef.current.activeChannelId), s)
         },
+        onSongStart: (song, startedAt) =>
+          updateHistory(addToHistory(historyRef.current, songRecord(song, startedAt))),
         onError: (e) => reportAudioError(e),
       }),
-    [reportAudioError],
+    [reportAudioError, updateHistory],
   )
   const songsRef = useRef<SongController | null>(null)
   // Built on first use (from an effect or handler), never during render
@@ -296,7 +328,7 @@ export function App() {
     }
     try {
       await playerRef.current.init()
-      songs().start()
+      songs().start((historyRef.current[0]?.number ?? 0) + 1)
       setPlaying(true)
     } catch (e) {
       reportAudioError(e)
@@ -318,6 +350,7 @@ export function App() {
     setState(next)
     setCompiled(compileGenome(next.genome, mutesRef.current, kitFor(id)))
     setMutes({ ...DEFAULT_MUTES })
+    updateHistory(loadSongHistory(storage, storageIdFor(id)), id)
     sessionRef.current = { ...sessionRef.current, activeChannelId: id }
     saveSession(storage, sessionRef.current)
   }
@@ -391,6 +424,7 @@ export function App() {
     setState(next)
     setCompiled(compileGenome(next.genome, mutesRef.current, kitFor(channelId)))
     setLog([])
+    updateHistory([])
     sessionRef.current = { ...sessionRef.current, evolutionRunning: false }
     saveSession(storage, sessionRef.current)
   }
@@ -410,6 +444,8 @@ export function App() {
     setCompiled(compileGenome(next.genome, undefined, kitFor(sess.activeChannelId)))
     setMutes({ ...DEFAULT_MUTES })
     setLog([])
+    historyRef.current = []
+    setHistory([])
   }
 
   /** In song mode this keeps the playing song: its first generation is bookmarked. */
@@ -418,9 +454,35 @@ export function App() {
     const next = setBookmark(state, index)
     stateRef.current = next
     setState(next)
+    if (nowPlaying) {
+      const n = nowPlaying.song.number
+      const i = historyRef.current.findIndex((r) => r.number === n)
+      if (i >= 0) {
+        updateHistory(historyRef.current.map((r, j) => (j === i ? { ...r, kept: true } : r)))
+      }
+    }
     flash(
       nowPlaying ? `kept song ${nowPlaying.song.number} (gen ${index})` : `bookmarked gen ${index}`,
     )
+  }
+
+  /** Go back to the theme a past song started from and play new songs from there. */
+  const onPlayFrom = async (record: SongRecord) => {
+    const next = rewindToGeneration(stateRef.current, record.startGeneration)
+    if (!next) {
+      flash('that song is too old to go back to')
+      return
+    }
+    addLog(`back to song ${record.number} (gen ${record.startGeneration})`)
+    stateRef.current = next
+    setState(next)
+    if (playing && songs().isRunning()) await startMusic(true)
+    else await applyManual(next)
+  }
+
+  const onPlayFromClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const record = historyRef.current.find((r) => String(r.startedAt) === e.currentTarget.dataset.started)
+    if (record) void onPlayFrom(record)
   }
 
   const onRewindBookmark = async () => {
@@ -520,6 +582,12 @@ export function App() {
         <button type="button" onClick={() => void onMutate()}>
           Mutate
         </button>
+        <button type="button" onClick={() => songs().nextSection()} disabled={!nowPlaying}>
+          Next section
+        </button>
+        <button type="button" onClick={() => songs().nextSong()} disabled={!nowPlaying}>
+          Next song
+        </button>
         <button type="button" onClick={onBookmark}>
           {nowPlaying ? 'Keep this song' : 'Bookmark'}
         </button>
@@ -564,13 +632,13 @@ export function App() {
               Song {nowPlaying.song.number} ·{' '}
               {
                 SECTION_LABELS[
-                  nowPlaying.song.sections[nowPlaying.position.sectionIndex]!.role as SectionRole
+                  nowPlaying.song.form[nowPlaying.position.sectionIndex]!.role as SectionRole
                 ]
               }{' '}
               · {nowPlaying.position.barsLeftInSection} bars left
             </strong>
             <ol className="song-strip">
-              {nowPlaying.song.sections.map((sec, i) => (
+              {nowPlaying.song.form.map((sec, i) => (
                 <li
                   key={i}
                   className={
@@ -595,6 +663,46 @@ export function App() {
               ? 'Press Play to start songs. Each song runs through its sections while the music evolves.'
               : 'Evolution is off: Play loops the current pattern.'}
           </span>
+        )}
+      </section>
+
+      <section className="history">
+        <h2>Songs</h2>
+        {history.length === 0 ? (
+          <p className="song-idle">Songs you hear appear here. Keep the ones you like.</p>
+        ) : (
+          <ol>
+            {history.map((r) => {
+              const inHistory = state.history.records.some((h) => h.index === r.startGeneration)
+              const current = nowPlaying?.song.number === r.number
+              return (
+                <li key={r.startedAt} className={current ? 'current' : undefined}>
+                  <span className="history-title">
+                    {r.kept ? '★ ' : ''}Song {r.number}
+                  </span>
+                  <span>
+                    {r.tempo} BPM · {NOTE_NAMES[r.root]} {r.mode}
+                  </span>
+                  <span title={r.form.map((s) => `${s.role} ${s.bars}`).join(', ')}>
+                    {formSummary(r.form)}
+                  </span>
+                  <span>score {r.score.toFixed(2)}</span>
+                  {r.formChanges.length > 0 && (
+                    <span className="history-changes">{r.formChanges.join(', ')}</span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!inHistory || current}
+                    title={inHistory ? 'Play new songs from this theme' : 'Too old to go back to'}
+                    data-started={r.startedAt}
+                    onClick={onPlayFromClick}
+                  >
+                    Play from here
+                  </button>
+                </li>
+              )
+            })}
+          </ol>
         )}
       </section>
 

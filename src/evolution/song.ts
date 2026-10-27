@@ -6,7 +6,15 @@
 import { contrastMetrics, deriveContrast, varyContrast } from './contrast'
 import { stepGeneration, type EvolutionConfig, type EvolutionState } from './engine'
 import { DEFAULT_MUTATION_CONFIG, type MutationConfig } from './mutation'
-import { planForm, type SongLength, type SongTemplate } from '../music/form'
+import {
+  HIGHLIGHT_ROLES,
+  planForm,
+  varyForm,
+  type PlannedSection,
+  type SongLength,
+  type SongTemplate,
+} from '../music/form'
+import { createRng } from '../lib/rng'
 import type { Personality } from '../music/personality'
 import type { ScheduledSong, SongSection } from '../strudel/compiler'
 
@@ -16,10 +24,12 @@ export interface ComposeOptions {
   personality?: Personality
   config?: Partial<EvolutionConfig>
   now?: number
+  /** Sections to play instead of the template's plan (a varied form). */
+  form?: PlannedSection[]
 }
 
 /** Sections that play the contrast material. */
-export const CONTRAST_ROLES: ReadonlySet<string> = new Set(['drop', 'peak', 'chorus'])
+export const CONTRAST_ROLES: ReadonlySet<string> = HIGHLIGHT_ROLES
 
 export interface ComposedSong {
   sections: SongSection[]
@@ -27,6 +37,8 @@ export interface ComposedSong {
   startGeneration: number
   /** Evolution state after the last section, the parent of the next song. */
   state: EvolutionState
+  /** How the form differs from the genre's template plan. */
+  formChanges: string[]
 }
 
 /** Inside a song only the parts can change, not the tempo or key. */
@@ -35,7 +47,7 @@ function inSongMutation(base: MutationConfig): MutationConfig {
 }
 
 export function composeSong(state: EvolutionState, options: ComposeOptions): ComposedSong {
-  const form = planForm(options.template, state.genome.tempo, options.length)
+  const form = options.form ?? planForm(options.template, state.genome.tempo, options.length)
   const stepOptions = {
     personality: options.personality,
     now: options.now,
@@ -60,17 +72,25 @@ export function composeSong(state: EvolutionState, options: ComposeOptions): Com
       sections.push({ ...section, genome: current.genome, material: 'A' })
     }
   })
-  return { sections, startGeneration: state.generationIndex, state: current }
+  return { sections, startGeneration: state.generationIndex, state: current, formChanges: [] }
 }
 
-/** Between songs: one unrestricted step (tempo and key may move), then compose. */
+/**
+ * Between songs: one unrestricted step (tempo and key may move), a variation on the form
+ * (one or two changes within the genre's template), then compose.
+ */
 export function composeNextSong(state: EvolutionState, options: ComposeOptions): ComposedSong {
   const next = stepGeneration(state, {
     personality: options.personality,
     config: options.config,
     now: options.now,
   }).state
-  return composeSong(next, options)
+  // The form has its own seed so the theme's lineage is unchanged by it
+  const rng = createRng((next.rngState ^ 0x85ebca6b) >>> 0)
+  const planned = planForm(options.template, next.genome.tempo, options.length)
+  const varied = varyForm(planned, rng, rng.int(1, 2))
+  const song = composeSong(next, { ...options, form: varied.form })
+  return { ...song, formChanges: varied.changes }
 }
 
 export interface SongScore {
