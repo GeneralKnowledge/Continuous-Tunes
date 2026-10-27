@@ -158,56 +158,248 @@ function layer(ctor: 's' | 'note', tokens: string[], suffix: string, swingDelay:
   return `stack(${ctor}("${on}"), ${ctor}("${off}").late(${num(swingDelay)}))${suffix}`
 }
 
-/**
- * One genome as a Strudel pattern expression: `bars` cycles long, one cycle per bar.
- * THIS IS THE ONLY MODULE THAT KNOWS STRUDEL SYNTAX.
- */
-function genomePattern(genome: MusicGenome, mutes: LayerMutes | undefined, opts: RenderOptions, indent = ''): string {
+interface DrumSteps {
+  kick: boolean[]
+  snare: boolean[]
+  hihat: boolean[]
+}
+
+/** The genome's drums, thinned for the section's drum level. */
+function drumSteps(genome: MusicGenome, opts: RenderOptions): DrumSteps {
   const spb = genome.stepsPerBar
   const beat = Math.max(1, spb / 4)
-  const layers: string[] = []
-  // Before .slow(bars) one cycle is the whole loop, so a step is 1 / (spb × bars) cycles
-  const swing = genome.parameters.swing
-  const swingDelay = swing > 0.01 ? swing / (spb * genome.bars) : 0
-
-  if (layerOn(genome, 'drums', mutes, opts)) {
-    let { kick, snare, hihat } = genome.drums
-    if (opts.drums === 'light') {
-      kick = thin(kick, (s) => s === 0, spb)
-      snare = snare.map(() => false)
-      hihat = thin(hihat, (s) => s % beat === 0, spb)
-    } else if (opts.drums === 'mid') {
-      hihat = thin(hihat, (s) => s % Math.max(1, beat / 2) === 0, spb)
-    }
-    if (kick.some(Boolean)) layers.push(layer('s', boolTokens(kick, 'bd'), '', swingDelay))
-    if (snare.some(Boolean)) layers.push(layer('s', boolTokens(snare, 'sd'), '', swingDelay))
-    if (hihat.some(Boolean)) layers.push(layer('s', boolTokens(hihat, 'hh'), '.gain(0.55)', swingDelay))
+  let { kick, snare, hihat } = genome.drums
+  if (opts.drums === 'light') {
+    kick = thin(kick, (s) => s === 0, spb)
+    snare = snare.map(() => false)
+    hihat = thin(hihat, (s) => s % beat === 0, spb)
+  } else if (opts.drums === 'mid') {
+    hihat = thin(hihat, (s) => s % Math.max(1, beat / 2) === 0, spb)
   }
+  return { kick, snare, hihat }
+}
 
+function drumLayers(d: DrumSteps, swingDelay: number): string[] {
+  const layers: string[] = []
+  if (d.kick.some(Boolean)) layers.push(layer('s', boolTokens(d.kick, 'bd'), '', swingDelay))
+  if (d.snare.some(Boolean)) layers.push(layer('s', boolTokens(d.snare, 'sd'), '', swingDelay))
+  if (d.hihat.some(Boolean)) layers.push(layer('s', boolTokens(d.hihat, 'hh'), '.gain(0.55)', swingDelay))
+  return layers
+}
+
+/** Swing delay in cycles for a pattern whose one cycle holds `steps` grid steps. */
+function swingDelayFor(genome: MusicGenome, steps: number): number {
+  const swing = genome.parameters.swing
+  return swing > 0.01 ? swing / steps : 0
+}
+
+/** Bass, melody and chord layers (everything but drums), each holding the whole loop in one cycle. */
+function tonalLayers(genome: MusicGenome, mutes: LayerMutes | undefined, opts: RenderOptions): string[] {
+  const layers: string[] = []
+  const swingDelay = swingDelayFor(genome, genome.stepsPerBar * genome.bars)
   if (layerOn(genome, 'bass', mutes, opts)) {
     const tokens = noteTokens(genome, genome.bass.notes, genome.bass.octave)
     layers.push(layer('note', tokens, `.sound("sawtooth").lpf(${opts.bassLpf}).gain(0.7)`, swingDelay))
   }
-
   if (layerOn(genome, 'melody', mutes, opts)) {
     const tokens = noteTokens(genome, genome.melody.notes, genome.melody.octave)
     layers.push(layer('note', tokens, '.sound("triangle").gain(0.55)', swingDelay))
   }
-
   if (layerOn(genome, 'chords', mutes, opts)) {
     layers.push(
       layer('note', chordTokens(genome), `.sound("sawtooth").lpf(1200).gain(${opts.chordGain}).room(0.3)`, swingDelay),
     )
   }
+  return layers
+}
 
-  if (layers.length === 0) layers.push(`s("~")`)
+function stackOf(layers: string[], indent: string): string {
+  if (layers.length === 0) layers = [`s("~")`]
+  return `stack(\n${layers.map((l) => `${indent}  ${l}`).join(',\n')}\n${indent})`
+}
 
-  // The mini-notation strings hold the whole loop; slow it so one cycle is one bar
-  let body = `stack(\n${layers.map((l) => `${indent}  ${l}`).join(',\n')}\n${indent}).slow(${genome.bars})`
-  if (opts.sweep) {
-    body = `${body}.lpf(saw.range(${opts.sweep.from}, ${opts.sweep.to}).slow(${opts.sweep.bars}))`
+/** A whole-loop stack slowed so one cycle is one bar (the strings hold the whole loop). */
+function loopPattern(layers: string[], bars: number, indent: string): string {
+  return `${stackOf(layers, indent)}.slow(${bars})`
+}
+
+/**
+ * One genome as a Strudel pattern expression: `bars` cycles long, one cycle per bar.
+ * THIS IS THE ONLY MODULE THAT KNOWS STRUDEL SYNTAX.
+ */
+function genomePattern(genome: MusicGenome, mutes: LayerMutes | undefined, opts: RenderOptions, indent = ''): string {
+  const layers: string[] = []
+  if (layerOn(genome, 'drums', mutes, opts)) {
+    const swingDelay = swingDelayFor(genome, genome.stepsPerBar * genome.bars)
+    layers.push(...drumLayers(drumSteps(genome, opts), swingDelay))
   }
+  layers.push(...tonalLayers(genome, mutes, opts))
+  let body = loopPattern(layers, genome.bars, indent)
+  if (opts.sweep) body = `${body}.lpf(${sweepSignal(opts.sweep)})`
   return body
+}
+
+function sweepSignal(sweep: NonNullable<RenderOptions['sweep']>): string {
+  return `saw.range(${sweep.from}, ${sweep.to}).slow(${sweep.bars})`
+}
+
+/** How the last bar of a section leads into the next one. */
+export type FillKind = 'tom' | 'roll' | 'build' | 'riser'
+
+export interface SectionTransition {
+  /** Crash cymbal on the section's first beat (a drop landing). */
+  crash: boolean
+  /** Lead-in on the section's last bar, if another section follows in this song. */
+  fill: FillKind | null
+  /** Hats and snare rising across the section (builds). */
+  ramp: boolean
+}
+
+const LANDING_ROLES = new Set(['drop', 'peak', 'chorus'])
+
+/**
+ * Transitions for section `index`: builds ramp up and drop the kick for their last bar,
+ * a section rising into a bigger one ends on a snare roll, others on a tom fill, and a section
+ * without drums gets a hi-hat riser. Big sections land on a crash.
+ */
+export function sectionTransition(sections: readonly SongSection[], index: number): SectionTransition {
+  const sec = sections[index]!
+  const next = sections[index + 1]
+  const prev = sections[index - 1]
+  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
+  const end = sec.energyEnd ?? sec.energy
+  let fill: FillKind | null = null
+  if (next) {
+    const nextOpts = renderForSection(next.role, next.energy, next.energyEnd, next.bars)
+    if (sec.role === 'build') fill = 'build'
+    else if (opts.drums === 'off') fill = nextOpts.drums === 'off' ? null : 'riser'
+    else if (next.energy > end + 0.15) fill = 'roll'
+    else fill = 'tom'
+  }
+  return {
+    crash: prev !== undefined && LANDING_ROLES.has(sec.role) && opts.drums !== 'off',
+    fill,
+    ramp: sec.role === 'build' && sec.bars > 1,
+  }
+}
+
+function emptySteps(n: number): string[] {
+  return Array.from({ length: n }, () => '~')
+}
+
+/**
+ * Drums for one bar (one cycle) of the loop, ending in a fill.
+ * `bar` is the bar of the genome's loop that the section is on.
+ */
+function fillBar(genome: MusicGenome, opts: RenderOptions, bar: number, kind: FillKind, drumsOn: boolean): string[] {
+  const spb = genome.stepsPerBar
+  const slice = (a: boolean[]) => a.slice(bar * spb, (bar + 1) * spb)
+  const base = drumsOn ? drumSteps(genome, opts) : { kick: [], snare: [], hihat: [] }
+  const d: DrumSteps = {
+    kick: drumsOn ? slice(base.kick) : Array(spb).fill(false),
+    snare: drumsOn ? slice(base.snare) : Array(spb).fill(false),
+    hihat: drumsOn ? slice(base.hihat) : Array(spb).fill(false),
+  }
+  const layers: string[] = []
+  const swingDelay = swingDelayFor(genome, spb)
+  const quarter = Math.max(1, Math.floor(spb / 4))
+  const half = Math.max(1, Math.floor(spb / 2))
+  if (kind === 'riser') {
+    layers.push(`s("hh*${spb}").gain(saw.range(0.05, 0.5))`)
+    return layers
+  }
+  if (kind === 'tom') {
+    const from = spb - quarter
+    const toms = quarter >= 4 ? ['ht', 'ht', 'mt', 'lt'] : quarter === 2 ? ['mt', 'lt'] : ['lt']
+    const tokens = emptySteps(spb)
+    for (let i = from; i < spb; i++) {
+      d.snare[i] = false
+      d.hihat[i] = false
+      tokens[i] = toms[Math.floor(((i - from) * toms.length) / quarter)]!
+    }
+    layers.push(...drumLayers(d, swingDelay), `s("${tokens.join(' ')}").gain(0.7)`)
+    return layers
+  }
+  // Snare roll: the last half of the bar (or the whole bar at the end of a build, with no kick)
+  const from = kind === 'build' ? 0 : spb - half
+  const tokens = emptySteps(spb)
+  for (let i = from; i < spb; i++) {
+    d.snare[i] = false
+    d.hihat[i] = false
+    if (kind === 'build') d.kick[i] = false
+    // 8ths in the first half of a build's roll, every step after that
+    if (i >= spb - half || i % 2 === 0) tokens[i] = 'sd'
+  }
+  layers.push(...drumLayers(d, swingDelay), `s("${tokens.join(' ')}").gain(saw.range(0.3, 0.8))`)
+  return layers
+}
+
+interface Segment {
+  bars: number
+  code: string
+}
+
+/**
+ * One section as a list of segments: an optional crash bar, the body, and an optional fill bar.
+ * Each segment starts its loop at the right bar with .early(), since arrange() restarts each one at 0.
+ */
+function sectionSegments(
+  sections: readonly SongSection[],
+  index: number,
+  mutes: LayerMutes | undefined,
+  name: string,
+  defs: string[],
+): Segment[] {
+  const sec = sections[index]!
+  const g = sec.genome
+  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
+  const t = sectionTransition(sections, index)
+  const drumsAllowed = g.activeLayers.drums && !mutes?.drums
+  const drumsOn = layerOn(g, 'drums', mutes, opts)
+  const loopSwing = swingDelayFor(g, g.stepsPerBar * g.bars)
+  const drums = drumsOn ? drumLayers(drumSteps(g, opts), loopSwing) : []
+  const tonal = tonalLayers(g, mutes, opts)
+  const ramp = t.ramp && drumsAllowed ? [`s("[hh*16, sd*4]").gain(saw.range(0.05, 0.5).slow(${sec.bars}))`] : []
+  const crash = t.crash && drumsAllowed ? [`s("cr").gain(0.5)`] : []
+  const fill = t.fill && drumsAllowed && sec.bars > 1 ? t.fill : null
+
+  const sweep = opts.sweep ? `.lpf(${sweepSignal(opts.sweep)})` : ''
+  const shift = (bar: number) => (bar > 0 ? `.early(${bar})` : '')
+  // Each loop is defined once as a constant and shared by the section's segments
+  const define = (suffix: string, layers: string[]): string[] => {
+    if (layers.length === 0) return []
+    defs.push(`const ${name}${suffix} = ${loopPattern(layers, g.bars, '')}`)
+    return [`${name}${suffix}`]
+  }
+  const drumLoop = define('d', drums)
+  const tonalLoop = define('t', tonal)
+  const line = (layers: string[]) =>
+    layers.length === 0 ? 'silence' : layers.length === 1 ? layers[0]! : `stack(${layers.join(', ')})`
+  // A segment covering bars [from, from + n) of the section, with one-bar overlays on top
+  const segment = (from: number, n: number, perBar: string[] = []): Segment => ({
+    bars: n,
+    code: `${line([...drumLoop, ...tonalLoop, ...ramp, ...perBar])}${sweep}${shift(from)}`,
+  })
+
+  const out: Segment[] = []
+  let from = 0
+  let to = sec.bars
+  if (crash.length && sec.bars > (fill ? 2 : 1)) {
+    out.push(segment(0, 1, crash))
+    from = 1
+  }
+  if (fill) to = sec.bars - 1
+  if (to > from) out.push(segment(from, to - from))
+  if (fill) {
+    const bar = (sec.bars - 1) % g.bars
+    const fillDrums = fillBar(g, opts, bar, fill, drumsOn)
+    out.push({
+      bars: 1,
+      // The fill holds one bar; the tonal loop is shifted to the section's last bar
+      code: `${line([...tonalLoop, ...fillDrums])}${sweep}${shift(sec.bars - 1)}`,
+    })
+  }
+  return out
 }
 
 function cpsFor(tempo: number): string {
@@ -219,12 +411,12 @@ export function compileGenome(genome: MusicGenome, mutes?: LayerMutes): string {
   return `setcps(${cpsFor(genome.tempo)})\n${genomePattern(genome, mutes, FULL_RENDER)}`
 }
 
-function songPattern(song: ScheduledSong, mutes: LayerMutes | undefined): string {
-  const parts = song.sections.map((sec) => {
-    const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
-    return `    [${sec.bars}, ${genomePattern(sec.genome, mutes, opts, '    ')}]`
-  })
-  return `arrange(\n${parts.join(',\n')}\n  )`
+/** A song as `arrange(...)` of its section segments; loop constants go to `defs`. */
+function songPattern(song: ScheduledSong, mutes: LayerMutes | undefined, name: string, defs: string[]): string {
+  const parts = song.sections.flatMap((_, i) =>
+    sectionSegments(song.sections, i, mutes, `${name}s${i}`, defs).map((seg) => `  [${seg.bars}, ${seg.code}]`),
+  )
+  return `arrange(\n${parts.join(',\n')}\n)`
 }
 
 /** Song length in bars. */
@@ -256,16 +448,20 @@ function num(n: number): string {
  */
 export function compileTimeline(songs: ScheduledSong[], baseTempo: number, mutes?: LayerMutes): string {
   if (songs.length === 0) return `setcps(${cpsFor(baseTempo)})\nsilence`
+  const defs: string[] = []
   const parts: string[] = []
   const lead = songs[0]!.startCycle
   if (lead > 0) parts.push(`  [${num(lead)}, silence]`)
-  const entries = [...songs, songs[songs.length - 1]!]
-  for (const song of entries) {
+  songs.forEach((song, i) => {
     const ratio = tempoRatio(song, baseTempo)
-    const pattern = ratio === 1 ? songPattern(song, mutes) : `${songPattern(song, mutes)}.fast(${num(ratio)})`
-    parts.push(`  [${num(songCycles(song, baseTempo))}, ${pattern}]`)
-  }
-  return `setcps(${cpsFor(baseTempo)})\narrange(\n${parts.join(',\n')}\n)`
+    const pattern = songPattern(song, mutes, `song${i}`, defs)
+    defs.push(`const song${i} = ${ratio === 1 ? pattern : `${pattern}.fast(${num(ratio)})`}`)
+    parts.push(`  [${num(songCycles(song, baseTempo))}, song${i}]`)
+  })
+  // The last song again, in case the next one arrives late
+  const last = songs.length - 1
+  parts.push(`  [${num(songCycles(songs[last]!, baseTempo))}, song${last}]`)
+  return `setcps(${cpsFor(baseTempo)})\n${defs.join('\n')}\narrange(\n${parts.join(',\n')}\n)`
 }
 
 /** Human-readable one-line summary for the UI. */
