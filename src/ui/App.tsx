@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   CHANNELS,
+  channelKit,
   channelPersonality,
   channelSeed,
   channelSongTemplate,
+  channelStorageId,
   getChannel,
 } from '../music/channels'
 import { SECTION_LABELS, SONG_LENGTHS, type SectionRole, type SongLength } from '../music/form'
@@ -50,9 +52,12 @@ function defaultSession(): AppSession {
   }
 }
 
+const kitFor = (channelId: string) => channelKit(getChannel(channelId))
+const storageIdFor = (channelId: string) => channelStorageId(getChannel(channelId))
+
 function bootState(channelId: string, seed: number): EvolutionState {
   const channel = getChannel(channelId)
-  const existing = loadChannelState(storage, channelId)
+  const existing = loadChannelState(storage, storageIdFor(channelId))
   if (existing) {
     // Re-score with the current fitness so saved scores from older versions don't skew selection
     const fitness = evaluateFitness(existing.genome, channelPersonality(channel))
@@ -112,7 +117,7 @@ export function App() {
   const [nowPlaying, setNowPlaying] = useState<NowPlaying | null>(null)
   const [wakeLock, setWakeLock] = useState(false)
   const [mutes, setMutes] = useState<LayerMutes>({ ...DEFAULT_MUTES })
-  const [compiled, setCompiled] = useState(() => compileGenome(state.genome))
+  const [compiled, setCompiled] = useState(() => compileGenome(state.genome, undefined, kitFor(initialSession.activeChannelId)))
   const [log, setLog] = useState<string[]>([])
   const [toast, setToast] = useState<string | null>(null)
 
@@ -139,7 +144,7 @@ export function App() {
 
   const persist = useCallback(
     (next: EvolutionState, sess?: Partial<AppSession>) => {
-      saveChannelState(storage, channelId, next)
+      saveChannelState(storage, storageIdFor(channelId), next)
       const session: AppSession = {
         ...sessionRef.current,
         activeChannelId: channelId,
@@ -164,7 +169,11 @@ export function App() {
   /** Play the current genome as a plain loop (evolution off). */
   const refreshAudio = useCallback(async (genome = stateRef.current.genome) => {
     try {
-      const result = await playerRef.current.playGenome(genome, mutesRef.current)
+      const result = await playerRef.current.playGenome(
+        genome,
+        mutesRef.current,
+        kitFor(sessionRef.current.activeChannelId),
+      )
       setCompiled(result.code)
       setPlaying(true)
       setAudioStatus(playerRef.current.status())
@@ -200,6 +209,7 @@ export function App() {
             .candidatesPerGeneration,
         }),
         mutes: () => mutesRef.current,
+        kit: () => kitFor(sessionRef.current.activeChannelId),
         onComposed: (song, s) => {
           const bars = song.sections.reduce((a, x) => a + x.bars, 0)
           const score = evaluateSong(song.sections)
@@ -209,7 +219,7 @@ export function App() {
               ...prev,
             ].slice(0, 20),
           )
-          saveChannelState(storage, sessionRef.current.activeChannelId, s)
+          saveChannelState(storage, storageIdFor(sessionRef.current.activeChannelId), s)
         },
         onError: (e) => reportAudioError(e),
       }),
@@ -270,7 +280,7 @@ export function App() {
       songs().refresh()
       return
     }
-    const code = compileGenome(stateRef.current.genome, mutes)
+    const code = compileGenome(stateRef.current.genome, mutes, kitFor(sessionRef.current.activeChannelId))
     setCompiled(code)
     if (playerRef.current.isPlaying()) {
       void playerRef.current.playCode(code).catch(reportAudioError)
@@ -306,7 +316,7 @@ export function App() {
     const next = bootState(id, rngSeed)
     stateRef.current = next
     setState(next)
-    setCompiled(compileGenome(next.genome, mutesRef.current))
+    setCompiled(compileGenome(next.genome, mutesRef.current, kitFor(id)))
     setMutes({ ...DEFAULT_MUTES })
     sessionRef.current = { ...sessionRef.current, activeChannelId: id }
     saveSession(storage, sessionRef.current)
@@ -350,7 +360,7 @@ export function App() {
     if (songs().isRunning()) {
       flash('changes play from the next song')
     } else {
-      setCompiled(compileGenome(next.genome, mutesRef.current))
+      setCompiled(compileGenome(next.genome, mutesRef.current, kitFor(sessionRef.current.activeChannelId)))
       if (playing) await refreshAudio(next.genome)
     }
   }
@@ -371,7 +381,7 @@ export function App() {
   const onResetChannel = () => {
     stopMusic()
     setEvolving(false)
-    clearChannel(storage, channelId)
+    clearChannel(storage, storageIdFor(channelId))
     const next = createEvolutionState(channelSeed(channel), rngSeed, {
       personality,
       channelId,
@@ -379,7 +389,7 @@ export function App() {
     })
     stateRef.current = next
     setState(next)
-    setCompiled(compileGenome(next.genome, mutesRef.current))
+    setCompiled(compileGenome(next.genome, mutesRef.current, kitFor(channelId)))
     setLog([])
     sessionRef.current = { ...sessionRef.current, evolutionRunning: false }
     saveSession(storage, sessionRef.current)
@@ -397,7 +407,7 @@ export function App() {
     const next = bootState(sess.activeChannelId, sess.rngSeed)
     stateRef.current = next
     setState(next)
-    setCompiled(compileGenome(next.genome))
+    setCompiled(compileGenome(next.genome, undefined, kitFor(sess.activeChannelId)))
     setMutes({ ...DEFAULT_MUTES })
     setLog([])
   }

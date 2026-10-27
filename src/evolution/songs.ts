@@ -6,6 +6,7 @@
 import type { EvolutionConfig, EvolutionState } from './engine'
 import { composeNextSong, composeSong, positionInSong, type SongPosition } from './song'
 import type { SongLength, SongTemplate } from '../music/form'
+import type { SoundKit } from '../music/kits'
 import type { Personality } from '../music/personality'
 import {
   compileTimeline,
@@ -32,6 +33,8 @@ export interface SongControllerOptions {
   personality: () => Personality | undefined
   config: () => Partial<EvolutionConfig> | undefined
   mutes: () => LayerMutes
+  /** The channel's sounds; the default kit when left out. */
+  kit?: () => SoundKit
   /** Called after a song is composed (its sections are new generations). */
   onComposed?: (song: PlannedSong, state: EvolutionState) => void
   onError?: (e: unknown) => void
@@ -77,7 +80,7 @@ export function createSongController(options: SongControllerOptions): SongContro
   }
 
   function send(): void {
-    const code = compileTimeline(songs, baseTempo, options.mutes())
+    const code = compileTimeline(songs, baseTempo, options.mutes(), options.kit?.())
     options.play(code).catch((e: unknown) => options.onError?.(e))
   }
 

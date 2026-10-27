@@ -93,6 +93,41 @@ export const SONG_TEMPLATES: Record<string, SongTemplate> = {
       { role: 'outro', weight: 2, energy: 0.3, energyEnd: 0.15 },
     ],
   },
+  dusty: {
+    minutes: 3,
+    sections: [
+      { role: 'intro', weight: 1, energy: 0.3 },
+      { role: 'verse', weight: 2, energy: 0.55 },
+      { role: 'chorus', weight: 2, energy: 0.75 },
+      { role: 'verse', weight: 2, energy: 0.55 },
+      { role: 'chorus', weight: 2, energy: 0.8 },
+      { role: 'outro', weight: 1, energy: 0.3, energyEnd: 0.15 },
+    ],
+  },
+  rolling: {
+    minutes: 5,
+    sections: [
+      { role: 'intro', weight: 2, energy: 0.3, energyEnd: 0.5 },
+      { role: 'build', weight: 1, energy: 0.55, energyEnd: 0.9 },
+      { role: 'drop', weight: 4, energy: 1 },
+      { role: 'breakdown', weight: 2, energy: 0.35 },
+      { role: 'build', weight: 1, energy: 0.5, energyEnd: 0.9 },
+      { role: 'drop', weight: 4, energy: 1 },
+      { role: 'outro', weight: 2, energy: 0.4, energyEnd: 0.2 },
+    ],
+  },
+  euphoric: {
+    minutes: 7,
+    sections: [
+      { role: 'intro', weight: 2, energy: 0.35 },
+      { role: 'groove', weight: 3, energy: 0.6 },
+      { role: 'breakdown', weight: 3, energy: 0.3, energyEnd: 0.5 },
+      { role: 'build', weight: 1, energy: 0.6, energyEnd: 0.95 },
+      { role: 'drop', weight: 4, energy: 1 },
+      { role: 'groove', weight: 2, energy: 0.65 },
+      { role: 'outro', weight: 2, energy: 0.4, energyEnd: 0.2 },
+    ],
+  },
   folk: {
     minutes: 4,
     sections: [

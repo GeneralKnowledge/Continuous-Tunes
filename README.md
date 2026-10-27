@@ -94,18 +94,23 @@ Scores against personality **sweet spots**. Penalises empty silence, wall-of-sou
 
 ## Channels (= genres)
 
-UI “Channel” selector. Each channel = seed + personality (which also picks the song form) + candidates/gen:
+UI “Channel” selector. Each channel = seed + personality (which also picks the song form) + sound kit + candidates/gen:
 
-| Channel | Seed | Personality |
-|---------|------|-------------|
-| Electronic | electronic | driving |
-| Ambient | ambient | lush |
-| Minimal | minimal | sparse |
-| House | electronic | groovy |
-| Downtempo | ambient | chill |
-| Folk | pentatonic | folk |
+| Channel | Seed | Personality | Sound kit |
+|---------|------|-------------|-----------|
+| Electronic | electronic | driving | 808 drums, resonant acid bass, plucked square lead |
+| House | house | groovy | club kick, claps, open hats, organ stabs, round bass |
+| Minimal | minimal-techno | sparse | club kick, rimshots, sine sub, echoing dub chords |
+| Ambient | ambient | lush | soft kit, supersaw pads, glassy lead, big reverb |
+| Downtempo | downtempo | chill | laid-back kit, FM electric piano, warm bass |
+| Folk | pentatonic | folk | acoustic-style kit, plucked lead, strummed chords |
+| Lo-fi hip hop | lofi | dusty | dusty 808s, bit-crushed electric piano, sine bass |
+| Drum & bass | dnb | rolling | stretched breakbeat under the drums, growling bass |
+| Trance | trance | euphoric | hard kick, rolling bass, supersaw lead and pads |
 
-Each channel persists its own lineage in `localStorage`. Switching resumes that channel. Refresh restores active channel + current genome.
+Sound kits live in `src/music/kits.ts`: drum samples (dirt-samples `bank:index`; never a bare-number bank like `909`, which mini-notation reads as a number), synth voices (waveform, filter, envelope, FM, echo, bitcrush) and a `master` trim that keeps genres at about the same loudness. The compiler turns a kit into Strudel code; `DEFAULT_KIT` reproduces the original sounds.
+
+Each channel persists its own lineage in `localStorage`; a channel whose seed changed gets a `seedVersion`, so its lineage is stored under a new id (`house@v2`) and old saves don't bring back the old sound. Switching resumes that channel. Refresh restores active channel + current genome.
 
 ## Songs
 
@@ -193,7 +198,7 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and the production b
 ## Add a channel
 
 1. Add an entry to `CHANNELS` in `src/music/channels.ts`
-2. Point at an existing seed + personality (or add a personality in `personality.ts`)
+2. Point at an existing seed + personality (or add a personality in `personality.ts`) and add a kit to `KITS` in `src/music/kits.ts` under the channel id
 3. Set `candidatesPerGeneration`; the song form comes from the personality (`SONG_TEMPLATES` in `src/music/form.ts`)
 
 ## Persistence
