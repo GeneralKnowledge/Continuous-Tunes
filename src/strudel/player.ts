@@ -22,12 +22,15 @@ export interface StrudelPlayer {
   playCode: (code: string) => Promise<PlayResult>
   stop: () => void
   isPlaying: () => boolean
+  /** Playback position in cycles (bars at the playing tempo); 0 before init. */
+  now: () => number
 }
 
 type StrudelModule = typeof import('@strudel/web')
 
 export function createStrudelPlayer(): StrudelPlayer {
   let strudel: StrudelModule | null = null
+  let repl: { scheduler: { now(): number } } | null = null
   let status: PlayerStatus = 'idle'
   let error: string | null = null
   let playing = false
@@ -42,7 +45,7 @@ export function createStrudelPlayer(): StrudelPlayer {
     initPromise = (async () => {
       try {
         const mod = await import('@strudel/web')
-        await mod.initStrudel({
+        repl = await mod.initStrudel({
           prebake: async () => {
             await mod.samples('github:tidalcycles/dirt-samples')
           },
@@ -120,5 +123,12 @@ export function createStrudelPlayer(): StrudelPlayer {
     playCode,
     stop,
     isPlaying: () => playing,
+    now: () => {
+      try {
+        return repl?.scheduler.now() ?? 0
+      } catch {
+        return 0
+      }
+    },
   }
 }

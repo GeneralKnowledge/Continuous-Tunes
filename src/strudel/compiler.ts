@@ -39,17 +39,15 @@ function scaleDegreeNote(genome: MusicGenome, degree: number, octave: number): s
   return `${NOTE_NAMES[semis % 12]!}${Math.floor(semis / 12)}`
 }
 
-function boolToMini(steps: boolean[], hit: string): string {
-  return steps.map((on) => (on ? hit : '~')).join(' ')
+function boolTokens(steps: boolean[], hit: string): string[] {
+  return steps.map((on) => (on ? hit : '~'))
 }
 
-function notesToMini(genome: MusicGenome, notes: (number | null)[], octave: number): string {
-  return notes
-    .map((d) => (d === null ? '~' : scaleDegreeNote(genome, d, octave)))
-    .join(' ')
+function noteTokens(genome: MusicGenome, notes: (number | null)[], octave: number): string[] {
+  return notes.map((d) => (d === null ? '~' : scaleDegreeNote(genome, d, octave)))
 }
 
-function chordNotesMini(genome: MusicGenome): string {
+function chordTokens(genome: MusicGenome): string[] {
   const { progression, voicing } = genome.chords
   const stepsPerBar = genome.stepsPerBar
   const tokens: string[] = []
@@ -68,62 +66,206 @@ function chordNotesMini(genome: MusicGenome): string {
       }
     }
   }
-  return tokens.join(' ')
+  return tokens
+}
+
+/** How a section renders the theme: which layers play and how open the filters are. */
+export interface RenderOptions {
+  drums: 'off' | 'light' | 'mid' | 'full'
+  bass: boolean
+  melody: boolean
+  chords: boolean
+  /** Bass low-pass cutoff in Hz. */
+  bassLpf: number
+  chordGain: number
+  /** Whole-section filter sweep (builds, fades): cutoff from → to in Hz. */
+  sweep?: { from: number; to: number; bars: number }
+}
+
+export const FULL_RENDER: RenderOptions = {
+  drums: 'full',
+  bass: true,
+  melody: true,
+  chords: true,
+  bassLpf: 800,
+  chordGain: 0.35,
+}
+
+/** One section of a song: the genome to play and how loud / full to play it. */
+export interface SongSection {
+  role: string
+  bars: number
+  energy: number
+  energyEnd?: number
+  genome: MusicGenome
+}
+
+/** A song placed on the timeline, starting at an absolute cycle (1 cycle = 1 bar at the base tempo). */
+export interface ScheduledSong {
+  startCycle: number
+  sections: SongSection[]
+}
+
+function cutoffForEnergy(e: number): number {
+  return Math.round(300 + 4200 * e * e)
+}
+
+/**
+ * Energy → arrangement. Low energy thins drums and drops layers; breakdowns lose kick and bass.
+ * Ramping sections render at their higher energy and sweep the filter across the section.
+ */
+export function renderForSection(role: string, energy: number, energyEnd: number | undefined, bars: number): RenderOptions {
+  const e = Math.max(energy, energyEnd ?? energy)
+  const breakdown = role === 'breakdown'
+  const opts: RenderOptions = {
+    drums: breakdown ? (e >= 0.3 ? 'light' : 'off') : e < 0.2 ? 'off' : e < 0.45 ? 'light' : e < 0.7 ? 'mid' : 'full',
+    bass: !breakdown && e >= 0.3,
+    melody: breakdown || e >= 0.55,
+    chords: true,
+    bassLpf: Math.round(300 + 900 * e),
+    chordGain: Number((0.2 + 0.2 * e).toFixed(2)),
+  }
+  if (energyEnd !== undefined && energyEnd !== energy) {
+    opts.sweep = { from: cutoffForEnergy(energy), to: cutoffForEnergy(energyEnd), bars }
+  }
+  return opts
+}
+
+function thin(arr: boolean[], keep: (stepInBar: number) => boolean, spb: number): boolean[] {
+  return arr.map((on, i) => on && keep(i % spb))
 }
 
 function layerOn(
   genome: MusicGenome,
   layer: keyof MusicGenome['activeLayers'],
-  mutes?: LayerMutes,
+  mutes: LayerMutes | undefined,
+  opts: RenderOptions,
 ): boolean {
-  if (!genome.activeLayers[layer]) return false
-  if (mutes?.[layer]) return false
-  return true
+  if (!genome.activeLayers[layer] || mutes?.[layer]) return false
+  return layer === 'drums' ? opts.drums !== 'off' : opts[layer]
 }
 
 /**
- * Compile a MusicGenome into executable Strudel code.
+ * One layer from its step tokens. Swing delays the off-beat steps (odd grid steps) by
+ * `swingDelay` cycles; Strudel's swingBy() doubles notes that fill a whole half-slice,
+ * so the delay is applied to a separate off-beat pattern instead.
+ */
+function layer(ctor: 's' | 'note', tokens: string[], suffix: string, swingDelay: number): string {
+  const offbeats = tokens.some((t, i) => i % 2 === 1 && t !== '~')
+  if (swingDelay <= 0 || !offbeats) return `${ctor}("${tokens.join(' ')}")${suffix}`
+  const on = tokens.map((t, i) => (i % 2 === 0 ? t : '~')).join(' ')
+  const off = tokens.map((t, i) => (i % 2 === 1 ? t : '~')).join(' ')
+  return `stack(${ctor}("${on}"), ${ctor}("${off}").late(${num(swingDelay)}))${suffix}`
+}
+
+/**
+ * One genome as a Strudel pattern expression: `bars` cycles long, one cycle per bar.
  * THIS IS THE ONLY MODULE THAT KNOWS STRUDEL SYNTAX.
  */
-export function compileGenome(genome: MusicGenome, mutes?: LayerMutes): string {
-  const cps = genome.tempo / 60 / 4
+function genomePattern(genome: MusicGenome, mutes: LayerMutes | undefined, opts: RenderOptions, indent = ''): string {
+  const spb = genome.stepsPerBar
+  const beat = Math.max(1, spb / 4)
   const layers: string[] = []
-
-  if (layerOn(genome, 'drums', mutes)) {
-    const kick = boolToMini(genome.drums.kick, 'bd')
-    const snare = boolToMini(genome.drums.snare, 'sd')
-    const hihat = boolToMini(genome.drums.hihat, 'hh')
-    layers.push(`  s("${kick}")`)
-    layers.push(`  s("${snare}")`)
-    layers.push(`  s("${hihat}").gain(0.55)`)
-  }
-
-  if (layerOn(genome, 'bass', mutes)) {
-    const mini = notesToMini(genome, genome.bass.notes, genome.bass.octave)
-    layers.push(`  note("${mini}").sound("sawtooth").lpf(800).gain(0.7)`)
-  }
-
-  if (layerOn(genome, 'melody', mutes)) {
-    const mini = notesToMini(genome, genome.melody.notes, genome.melody.octave)
-    layers.push(`  note("${mini}").sound("triangle").gain(0.55)`)
-  }
-
-  if (layerOn(genome, 'chords', mutes)) {
-    const mini = chordNotesMini(genome)
-    layers.push(`  note("${mini}").sound("sawtooth").lpf(1200).gain(0.35).room(0.3)`)
-  }
-
-  if (layers.length === 0) {
-    layers.push(`  s("~")`)
-  }
-
+  // Before .slow(bars) one cycle is the whole loop, so a step is 1 / (spb × bars) cycles
   const swing = genome.parameters.swing
-  let body = `stack(\n${layers.join(',\n')}\n)`
-  if (swing > 0.01) {
-    body = `${body}.swingBy(${swing.toFixed(3)}, 16)`
+  const swingDelay = swing > 0.01 ? swing / (spb * genome.bars) : 0
+
+  if (layerOn(genome, 'drums', mutes, opts)) {
+    let { kick, snare, hihat } = genome.drums
+    if (opts.drums === 'light') {
+      kick = thin(kick, (s) => s === 0, spb)
+      snare = snare.map(() => false)
+      hihat = thin(hihat, (s) => s % beat === 0, spb)
+    } else if (opts.drums === 'mid') {
+      hihat = thin(hihat, (s) => s % Math.max(1, beat / 2) === 0, spb)
+    }
+    if (kick.some(Boolean)) layers.push(layer('s', boolTokens(kick, 'bd'), '', swingDelay))
+    if (snare.some(Boolean)) layers.push(layer('s', boolTokens(snare, 'sd'), '', swingDelay))
+    if (hihat.some(Boolean)) layers.push(layer('s', boolTokens(hihat, 'hh'), '.gain(0.55)', swingDelay))
   }
 
-  return `setcps(${cps.toFixed(5)})\n${body}`
+  if (layerOn(genome, 'bass', mutes, opts)) {
+    const tokens = noteTokens(genome, genome.bass.notes, genome.bass.octave)
+    layers.push(layer('note', tokens, `.sound("sawtooth").lpf(${opts.bassLpf}).gain(0.7)`, swingDelay))
+  }
+
+  if (layerOn(genome, 'melody', mutes, opts)) {
+    const tokens = noteTokens(genome, genome.melody.notes, genome.melody.octave)
+    layers.push(layer('note', tokens, '.sound("triangle").gain(0.55)', swingDelay))
+  }
+
+  if (layerOn(genome, 'chords', mutes, opts)) {
+    layers.push(
+      layer('note', chordTokens(genome), `.sound("sawtooth").lpf(1200).gain(${opts.chordGain}).room(0.3)`, swingDelay),
+    )
+  }
+
+  if (layers.length === 0) layers.push(`s("~")`)
+
+  // The mini-notation strings hold the whole loop; slow it so one cycle is one bar
+  let body = `stack(\n${layers.map((l) => `${indent}  ${l}`).join(',\n')}\n${indent}).slow(${genome.bars})`
+  if (opts.sweep) {
+    body = `${body}.lpf(saw.range(${opts.sweep.from}, ${opts.sweep.to}).slow(${opts.sweep.bars}))`
+  }
+  return body
+}
+
+function cpsFor(tempo: number): string {
+  return (tempo / 60 / 4).toFixed(5)
+}
+
+/** Compile a MusicGenome into executable Strudel code: the loop at full energy. */
+export function compileGenome(genome: MusicGenome, mutes?: LayerMutes): string {
+  return `setcps(${cpsFor(genome.tempo)})\n${genomePattern(genome, mutes, FULL_RENDER)}`
+}
+
+function songPattern(song: ScheduledSong, mutes: LayerMutes | undefined): string {
+  const parts = song.sections.map((sec) => {
+    const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
+    return `    [${sec.bars}, ${genomePattern(sec.genome, mutes, opts, '    ')}]`
+  })
+  return `arrange(\n${parts.join(',\n')}\n  )`
+}
+
+/** Song length in bars. */
+export function songBars(song: ScheduledSong): number {
+  return song.sections.reduce((a, s) => a + s.bars, 0)
+}
+
+/**
+ * Tempo ratio of a song against the timeline's base tempo. A song at a different tempo is
+ * sped up or slowed down so one global cps can carry every song.
+ */
+export function tempoRatio(song: ScheduledSong, baseTempo: number): number {
+  return (song.sections[0]?.genome.tempo ?? baseTempo) / baseTempo
+}
+
+/** Cycles a song occupies on a timeline with this base tempo. */
+export function songCycles(song: ScheduledSong, baseTempo: number): number {
+  return songBars(song) / tempoRatio(song, baseTempo)
+}
+
+function num(n: number): string {
+  return String(Number(n.toFixed(6)))
+}
+
+/**
+ * Compile consecutive songs into one pattern on absolute cycles, so the audio clock (not JS timers)
+ * switches sections and songs. Leading silence covers the cycles before the first song; the last
+ * song is repeated as a safety net in case the next one arrives late.
+ */
+export function compileTimeline(songs: ScheduledSong[], baseTempo: number, mutes?: LayerMutes): string {
+  if (songs.length === 0) return `setcps(${cpsFor(baseTempo)})\nsilence`
+  const parts: string[] = []
+  const lead = songs[0]!.startCycle
+  if (lead > 0) parts.push(`  [${num(lead)}, silence]`)
+  const entries = [...songs, songs[songs.length - 1]!]
+  for (const song of entries) {
+    const ratio = tempoRatio(song, baseTempo)
+    const pattern = ratio === 1 ? songPattern(song, mutes) : `${songPattern(song, mutes)}.fast(${num(ratio)})`
+    parts.push(`  [${num(songCycles(song, baseTempo))}, ${pattern}]`)
+  }
+  return `setcps(${cpsFor(baseTempo)})\narrange(\n${parts.join(',\n')}\n)`
 }
 
 /** Human-readable one-line summary for the UI. */

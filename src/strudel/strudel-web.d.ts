@@ -2,7 +2,14 @@ declare module '@strudel/web' {
   export function initStrudel(options?: {
     prebake?: () => void | Promise<void>
     miniAllStrings?: boolean
-  }): Promise<unknown>
+  }): Promise<StrudelRepl>
+
+  export interface StrudelRepl {
+    scheduler: {
+      /** Current playback position in cycles. */
+      now(): number
+    }
+  }
 
   export function hush(): void
 

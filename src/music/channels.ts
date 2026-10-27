@@ -1,17 +1,17 @@
 import { getPersonality, type Personality } from './personality'
 import type { MusicGenome } from './genome'
 import { getSeed, type SeedName } from './seeds'
+import { getSongTemplate, type SongTemplate } from './form'
 
 /**
  * A Channel is a genre preset — not a parallel audio stream.
- * It binds a seed genome, personality, and evolution defaults.
+ * It binds a seed genome, personality (which also picks the song form), and evolution defaults.
  */
 export interface Channel {
   id: string
   label: string
   seedName: SeedName
   personalityId: string
-  defaultGenerationBars: number
   candidatesPerGeneration: number
 }
 
@@ -21,7 +21,6 @@ export const CHANNELS: Channel[] = [
     label: 'Electronic',
     seedName: 'electronic',
     personalityId: 'driving',
-    defaultGenerationBars: 8,
     candidatesPerGeneration: 10,
   },
   {
@@ -29,7 +28,6 @@ export const CHANNELS: Channel[] = [
     label: 'Ambient',
     seedName: 'ambient',
     personalityId: 'lush',
-    defaultGenerationBars: 16,
     candidatesPerGeneration: 8,
   },
   {
@@ -37,7 +35,6 @@ export const CHANNELS: Channel[] = [
     label: 'Minimal',
     seedName: 'minimal',
     personalityId: 'sparse',
-    defaultGenerationBars: 8,
     candidatesPerGeneration: 8,
   },
   {
@@ -45,7 +42,6 @@ export const CHANNELS: Channel[] = [
     label: 'House',
     seedName: 'electronic',
     personalityId: 'groovy',
-    defaultGenerationBars: 8,
     candidatesPerGeneration: 12,
   },
   {
@@ -53,7 +49,6 @@ export const CHANNELS: Channel[] = [
     label: 'Downtempo',
     seedName: 'ambient',
     personalityId: 'chill',
-    defaultGenerationBars: 16,
     candidatesPerGeneration: 8,
   },
   {
@@ -61,7 +56,6 @@ export const CHANNELS: Channel[] = [
     label: 'Folk',
     seedName: 'pentatonic',
     personalityId: 'folk',
-    defaultGenerationBars: 8,
     candidatesPerGeneration: 10,
   },
 ]
@@ -80,5 +74,6 @@ export function channelPersonality(channel: Channel): Personality {
   return getPersonality(channel.personalityId)
 }
 
-export const EVOLVE_BAR_OPTIONS = [4, 8, 16, 32] as const
-export type EvolveBars = (typeof EVOLVE_BAR_OPTIONS)[number]
+export function channelSongTemplate(channel: Channel): SongTemplate {
+  return getSongTemplate(channel.personalityId)
+}

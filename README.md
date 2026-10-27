@@ -10,7 +10,7 @@ Most generative music tools either:
 - spit out one-shot patterns, or
 - need a neural net / cloud service.
 
-This project is a small **artificial musical ecosystem**: open the page, hit Play, and every N bars a mutation is tried. Interesting ones survive. Worse ones are occasionally accepted for exploration. Ancestry is remembered (bounded). The loop runs indefinitely while the tab is alive.
+This project is a small **artificial musical ecosystem**: open the page, hit Play, and it plays an endless run of **songs**, like a radio station. Each song has sections (intro, groove, build, drop, breakdown, outro…) and evolves once per section; between songs it evolves further, so the next song is related but new. Interesting mutations survive. Worse ones are occasionally accepted for exploration. Ancestry is remembered (bounded). The music runs indefinitely while the tab is alive.
 
 ## Architecture
 
@@ -32,8 +32,8 @@ Strudel Player  (@strudel/web: initStrudel / evaluate / hush)
 
 ```
 src/
-  evolution/    engine, mutation, fitness, selection, generation, continuous
-  music/        genome, seeds, channels, personality, validation
+  evolution/    engine, mutation, fitness, selection, generation, song, songs
+  music/        genome, seeds, channels, personality, form, validation
   strudel/      compiler, player
   persistence/  session + channel lineage (localStorage; SQLite-ready interface)
   ui/           App
@@ -94,7 +94,7 @@ Scores against personality **sweet spots**. Penalises empty silence, wall-of-sou
 
 ## Channels (= genres)
 
-UI “Channel” selector. Each channel = seed + personality + default evolve interval + candidates/gen:
+UI “Channel” selector. Each channel = seed + personality (which also picks the song form) + candidates/gen:
 
 | Channel | Seed | Personality |
 |---------|------|-------------|
@@ -107,13 +107,21 @@ UI “Channel” selector. Each channel = seed + personality + default evolve in
 
 Each channel persists its own lineage in `localStorage`. Switching resumes that channel. Refresh restores active channel + current genome.
 
+## Songs
+
+With evolution on, Play starts songs. Evolution off plays the current genome as a plain loop.
+
+- **Forms** (`src/music/form.ts`): each personality has a song template, a list of sections with a relative length and an energy level. House and Electronic run about 4½ minutes with builds, drops and a breakdown; Ambient (~7 min) and Downtempo (~6 min) are longer and gentler. Sections are whole 4-bar phrases.
+- **Song length** (short / medium / long) scales the template. It replaces the old "evolve every N bars" control.
+- **Composing** (`src/evolution/song.ts`): one generation per section boundary, with tempo and key frozen inside a song. Between songs one unrestricted step runs, so tempo or key can change at the handover.
+- **Energy**: each section renders the same genome at its energy: low energy drops melody, bass and drums; breakdowns drop kick and bass; builds sweep the filter open.
+- **Timeline** (`compileTimeline`): the current and next song are compiled into one `arrange()` on absolute cycles, so every section and song change happens on the audio clock, not on a JS timer. The next song is composed halfway through the current one; the last song is repeated in case the next one is late.
+- **Keep this song** bookmarks the first generation of the playing song.
+
 ## Forever playback
 
-- Genome → Strudel code (`setcps` + `stack`) → `evaluate()`
-- Evolve every 4 / 8 / 16 / 32 bars
-- Deadline-based polling (not fragile per-bar `setInterval` alone)
-- Screen **Wake Lock** while evolving
-- Re-schedule on `visibilitychange`
+- Genome → Strudel code (`setcps` + `stack(...).slow(bars)`, one bar per cycle) → `evaluate()`
+- Screen **Wake Lock** while music plays
 - If `evaluate` fails: hush + retry last good pattern
 - Evolution ON flag persists across refresh
 - **Browser limit:** leave the tab audible and preferably visible — browsers throttle background tabs
@@ -125,7 +133,7 @@ Verified against `@strudel/web@1.3.0`: `initStrudel({ prebake: () => samples('gi
 - **Now-playing strip** with last mutation + fitness delta ↑/↓
 - **Mute layers** (playback only — genome unchanged)
 - **Copy genome JSON / Strudel code**
-- **Bookmark** a generation + rewind (within bounded history; rewinding drops the later generations)
+- **Bookmark** a generation (or **Keep this song**) + rewind (within bounded history; rewinding drops the later generations)
 - **RNG seed** box reseeds the current lineage's randomness without resetting the genome
 - **Anti-plateau:** rising exploration + more experimental mutations as stagnation grows
 - **Channel fingerprints** (e.g. House four-on-floor, Ambient sparse drums)
@@ -183,7 +191,7 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and the production b
 
 1. Add an entry to `CHANNELS` in `src/music/channels.ts`
 2. Point at an existing seed + personality (or add a personality in `personality.ts`)
-3. Set `defaultGenerationBars` and `candidatesPerGeneration`
+3. Set `candidatesPerGeneration`; the song form comes from the personality (`SONG_TEMPLATES` in `src/music/form.ts`)
 
 ## Persistence
 

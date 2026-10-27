@@ -56,6 +56,7 @@ describe('Strudel compiler', () => {
     const g = getSeed('electronic')
     g.scale = { root: 9, mode: 'major' }
     g.melody.octave = 4
+    g.parameters.swing = 0
     g.melody.notes = g.melody.notes.map((_, i) => (i < 8 ? i : null))
     const line = compileGenome(g).split('\n').find((l) => l.includes('triangle'))!
     expect(line).toContain('"a4 b4 cs5 d5 e5 fs5 gs5 a5 ~')
