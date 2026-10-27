@@ -266,3 +266,54 @@ footer {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 25%, var(--track));
 }
+
+.history {
+  margin-bottom: 1.25rem;
+}
+
+.history h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+
+.history ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.9rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.history li.current {
+  color: var(--fg);
+  border-left: 3px solid var(--accent);
+}
+
+.history-title {
+  color: var(--fg);
+  font-weight: 600;
+  min-width: 5.5rem;
+}
+
+.history-changes {
+  font-style: italic;
+}
+
+.history li button {
+  margin-left: auto;
+  font-size: 0.75rem;
+}

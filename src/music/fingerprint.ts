@@ -10,7 +10,8 @@ export function applyChannelFingerprint(channelId: string, genome: MusicGenome):
   const spb = g.stepsPerBar
 
   switch (channelId) {
-    case 'house': {
+    case 'house':
+    case 'trance': {
       // Four-on-floor: kick on every beat (0, spb/4, …)
       const step = Math.max(1, Math.floor(spb / 4))
       for (let i = 0; i < g.drums.kick.length; i++) {
@@ -18,12 +19,31 @@ export function applyChannelFingerprint(channelId: string, genome: MusicGenome):
       }
       g.activeLayers.drums = true
       g.activeLayers.bass = true
-      // House likes a bit of swing, not none
-      if (g.parameters.swing < 0.04) g.parameters.swing = 0.06
+      // House likes a bit of swing, not none (trance stays straight)
+      if (channelId === 'house' && g.parameters.swing < 0.04) g.parameters.swing = 0.06
       break
     }
-    case 'ambient':
     case 'downtempo': {
+      // A laid-back beat, carried by the chords
+      g.activeLayers.chords = true
+      break
+    }
+    case 'lofi': {
+      // Lo-fi lives on a lazy swing and its chords
+      g.activeLayers.chords = true
+      if (g.parameters.swing < 0.2) g.parameters.swing = 0.25
+      break
+    }
+    case 'dnb': {
+      // The two-step: kick on the bar, snare on beats 2 and 4
+      const beat = Math.max(1, Math.floor(spb / 4))
+      for (let i = 0; i < g.drums.kick.length; i += spb) g.drums.kick[i] = true
+      for (let i = beat; i < g.drums.snare.length; i += 2 * beat) g.drums.snare[i] = true
+      g.activeLayers.drums = true
+      g.activeLayers.bass = true
+      break
+    }
+    case 'ambient': {
       // Sparse / no aggressive drums
       g.drums.snare = g.drums.snare.map(() => false)
       g.drums.kick = g.drums.kick.map((on, i) => on && i % spb === 0)

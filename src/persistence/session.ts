@@ -4,6 +4,7 @@
  */
 import type { EvolutionState, EvolutionSnapshot } from '../evolution/engine'
 import { snapshotOf, restoreSnapshot } from '../evolution/engine'
+import type { SongRecord } from '../evolution/songs'
 import type { MusicGenome } from '../music/genome'
 import { CHANNELS } from '../music/channels'
 import { SONG_LENGTHS, type SongLength } from '../music/form'
@@ -139,6 +140,24 @@ export function loadChannelState(backend: StorageBackend, channelId: string): Ev
 
 export function clearChannel(backend: StorageBackend, channelId: string): void {
   backend.removeItem(channelKey(channelId))
+  backend.removeItem(songsKey(channelId))
+}
+
+const songsKey = (channelId: string) => `songs:${channelId}`
+
+export function saveSongHistory(backend: StorageBackend, channelId: string, songs: readonly SongRecord[]): void {
+  backend.setItem(songsKey(channelId), JSON.stringify(songs))
+}
+
+export function loadSongHistory(backend: StorageBackend, channelId: string): SongRecord[] {
+  try {
+    const parsed: unknown = JSON.parse(backend.getItem(songsKey(channelId)) ?? '[]')
+    return Array.isArray(parsed)
+      ? (parsed as SongRecord[]).filter((r) => typeof r?.number === 'number' && Array.isArray(r.form))
+      : []
+  } catch {
+    return []
+  }
 }
 
 export function clearAll(backend: StorageBackend): void {

@@ -4,6 +4,7 @@
  * @strudel/web is loaded lazily on first play so it stays out of the initial bundle.
  */
 import { compileGenome, type LayerMutes } from './compiler'
+import type { SoundKit } from '../music/kits'
 import type { MusicGenome } from '../music/genome'
 
 export type PlayerStatus = 'idle' | 'loading' | 'ready' | 'playing' | 'error'
@@ -18,7 +19,7 @@ export interface StrudelPlayer {
   error: () => string | null
   lastGoodCode: () => string | null
   init: () => Promise<void>
-  playGenome: (genome: MusicGenome, mutes?: LayerMutes) => Promise<PlayResult>
+  playGenome: (genome: MusicGenome, mutes?: LayerMutes, kit?: SoundKit) => Promise<PlayResult>
   playCode: (code: string) => Promise<PlayResult>
   stop: () => void
   isPlaying: () => boolean
@@ -50,6 +51,9 @@ export function createStrudelPlayer(): StrudelPlayer {
             await mod.samples('github:tidalcycles/dirt-samples')
           },
         })
+        // initStrudel only sets audio up on the next mousedown, which has already happened
+        // by the time Play runs; without this, worklet sounds (supersaw, crush) fail at first.
+        await mod.initAudio()
         strudel = mod
         status = 'ready'
         error = null
@@ -99,8 +103,8 @@ export function createStrudelPlayer(): StrudelPlayer {
     }
   }
 
-  async function playGenome(genome: MusicGenome, mutes?: LayerMutes): Promise<PlayResult> {
-    const code = compileGenome(genome, mutes)
+  async function playGenome(genome: MusicGenome, mutes?: LayerMutes, kit?: SoundKit): Promise<PlayResult> {
+    const code = compileGenome(genome, mutes, kit)
     return playCode(code)
   }
 

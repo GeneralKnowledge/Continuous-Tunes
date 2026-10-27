@@ -94,18 +94,23 @@ Scores against personality **sweet spots**. Penalises empty silence, wall-of-sou
 
 ## Channels (= genres)
 
-UI “Channel” selector. Each channel = seed + personality (which also picks the song form) + candidates/gen:
+UI “Channel” selector. Each channel = seed + personality (which also picks the song form) + sound kit + candidates/gen:
 
-| Channel | Seed | Personality |
-|---------|------|-------------|
-| Electronic | electronic | driving |
-| Ambient | ambient | lush |
-| Minimal | minimal | sparse |
-| House | electronic | groovy |
-| Downtempo | ambient | chill |
-| Folk | pentatonic | folk |
+| Channel | Seed | Personality | Sound kit |
+|---------|------|-------------|-----------|
+| Electronic | electronic | driving | 808 drums, resonant acid bass, plucked square lead |
+| House | house | groovy | club kick, claps, open hats, organ stabs, round bass |
+| Minimal | minimal-techno | sparse | club kick, rimshots, sine sub, echoing dub chords |
+| Ambient | ambient | lush | soft kit, supersaw pads, glassy lead, big reverb |
+| Downtempo | downtempo | chill | laid-back kit, FM electric piano, warm bass |
+| Folk | pentatonic | folk | acoustic-style kit, plucked lead, strummed chords |
+| Lo-fi hip hop | lofi | dusty | dusty 808s, bit-crushed electric piano, sine bass |
+| Drum & bass | dnb | rolling | stretched breakbeat under the drums, growling bass |
+| Trance | trance | euphoric | hard kick, rolling bass, supersaw lead and pads |
 
-Each channel persists its own lineage in `localStorage`. Switching resumes that channel. Refresh restores active channel + current genome.
+Sound kits live in `src/music/kits.ts`: drum samples (dirt-samples `bank:index`; never a bare-number bank like `909`, which mini-notation reads as a number), synth voices (waveform, filter, envelope, FM, echo, bitcrush) and a `master` trim that keeps genres at about the same loudness. The compiler turns a kit into Strudel code; `DEFAULT_KIT` reproduces the original sounds.
+
+Each channel persists its own lineage in `localStorage`; a channel whose seed changed gets a `seedVersion`, so its lineage is stored under a new id (`house@v2`) and old saves don't bring back the old sound. Switching resumes that channel. Refresh restores active channel + current genome.
 
 ## Songs
 
@@ -119,7 +124,9 @@ With evolution on, Play starts songs. Evolution off plays the current genome as 
 - **Energy**: each section renders the same genome at its energy: low energy drops melody, bass and drums; breakdowns drop kick and bass; builds sweep the filter open. Loudness follows energy too (`levelForEnergy`, applied as `.velocity()`): an intro plays about 7.5 dB under a drop, and builds swell up to it.
 - **Transitions**: every section change has a lead-in on the section's last bar: a tom fill, a snare roll when the next section is bigger, or a hi-hat riser out of a section with no drums. Builds add rising hi-hats and snare and drop the kick for their last bar; drops, peaks and choruses land on a crash (`cr` from dirt-samples). The song's last section ends without a fill.
 - **Timeline** (`compileTimeline`): the current and next song are compiled into one `arrange()` on absolute cycles, so every section and song change happens on the audio clock, not on a JS timer. Each section's loops are defined once as constants and shared by its segments (crash bar, body, fill bar), which keeps the code small. The next song is composed halfway through the current one; the last song is repeated in case the next one is late.
-- **Keep this song** bookmarks the first generation of the playing song.
+- **Form mutation** (`varyForm`): from the second song on, the form gets one or two changes inside the genre's template: a section a phrase longer or shorter, repeated or left out, or its energy nudged. The intro and outro stay, every build still leads into a drop, peak or chorus, and the length stays within 75–135% of the plan. The log says what changed.
+- **Next section / Next song** skip on the next bar: the playing song is cut there (its last bar plays the lead-in fill) and the rest of the song, or the next one, starts. A song that is already queued is used rather than composing another.
+- **Song history**: each song that starts is listed with its tempo, key, form, score and form changes (newest first, 30 per channel, kept songs are never dropped). **Keep this song** bookmarks the song's first generation and stars it; **Play from here** goes back to a past song's theme and plays new songs from it, while that generation is still in the lineage history.
 
 ## Forever playback
 
@@ -193,7 +200,7 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and the production b
 ## Add a channel
 
 1. Add an entry to `CHANNELS` in `src/music/channels.ts`
-2. Point at an existing seed + personality (or add a personality in `personality.ts`)
+2. Point at an existing seed + personality (or add a personality in `personality.ts`) and add a kit to `KITS` in `src/music/kits.ts` under the channel id
 3. Set `candidatesPerGeneration`; the song form comes from the personality (`SONG_TEMPLATES` in `src/music/form.ts`)
 
 ## Persistence
