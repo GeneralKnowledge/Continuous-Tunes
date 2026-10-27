@@ -15,6 +15,7 @@ import {
   type EvolutionState,
 } from '../evolution/engine'
 import { evaluateFitness } from '../evolution/fitness'
+import { evaluateSong } from '../evolution/song'
 import { createSongController, type NowPlaying, type SongController } from '../evolution/songs'
 import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
@@ -201,9 +202,10 @@ export function App() {
         mutes: () => mutesRef.current,
         onComposed: (song, s) => {
           const bars = song.sections.reduce((a, x) => a + x.bars, 0)
+          const score = evaluateSong(song.sections)
           setLog((prev) =>
             [
-              `song ${song.number}: ${song.sections.length} sections, ${bars} bars, gens ${song.startGeneration}–${s.generationIndex}, fit=${s.fitness.score.toFixed(3)}`,
+              `song ${song.number}: ${song.sections.length} sections, ${bars} bars, gens ${song.startGeneration}–${s.generationIndex}, fit=${s.fitness.score.toFixed(3)}, song=${score.score.toFixed(2)} (contrast ${score.contrast.toFixed(2)})`,
               ...prev,
             ].slice(0, 20),
           )
@@ -561,9 +563,16 @@ export function App() {
               {nowPlaying.song.sections.map((sec, i) => (
                 <li
                   key={i}
-                  className={i === nowPlaying.position.sectionIndex ? 'current' : undefined}
+                  className={
+                    [
+                      i === nowPlaying.position.sectionIndex ? 'current' : '',
+                      sec.material === 'B' ? 'contrast' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || undefined
+                  }
                   style={{ flexGrow: sec.bars }}
-                  title={`${sec.bars} bars, energy ${sec.energy}${sec.energyEnd !== undefined ? `→${sec.energyEnd}` : ''}`}
+                  title={`${sec.bars} bars, energy ${sec.energy}${sec.energyEnd !== undefined ? `→${sec.energyEnd}` : ''}${sec.material === 'B' ? ', contrast material (B)' : ''}`}
                 >
                   {SECTION_LABELS[sec.role as SectionRole]}
                 </li>

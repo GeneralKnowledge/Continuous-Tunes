@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { createEvolutionState } from '../src/evolution/engine'
-import { composeSong, positionInSong } from '../src/evolution/song'
+import { contrastMetrics, deriveContrast } from '../src/evolution/contrast'
+import { CONTRAST_ROLES, composeSong, evaluateSong, positionInSong } from '../src/evolution/song'
 import { createSongController } from '../src/evolution/songs'
-import { channelPersonality, channelSeed, channelSongTemplate, getChannel } from '../src/music/channels'
+import {
+  CHANNELS,
+  channelPersonality,
+  channelSeed,
+  channelSongTemplate,
+  getChannel,
+} from '../src/music/channels'
 import { getSongTemplate, planForm } from '../src/music/form'
 import { cloneGenome } from '../src/music/genome'
 import { getSeed } from '../src/music/seeds'
@@ -271,5 +278,58 @@ describe('Song controller', () => {
 
     ctrl.stop()
     expect(ctrl.isRunning()).toBe(false)
+  })
+})
+
+describe('Contrast material', () => {
+  it('gives every channel a B that differs in melody and chords but keeps key, tempo and grid', () => {
+    for (const ch of CHANNELS) {
+      const personality = channelPersonality(ch)
+      for (let seed = 1; seed <= 5; seed++) {
+        const state = createEvolutionState(channelSeed(ch), seed, { channelId: ch.id, personality })
+        const song = composeSong(state, { template: channelSongTemplate(ch), length: 'medium', personality })
+        const theme = song.sections[0]!.genome
+        const bSections = song.sections.filter((s) => s.material === 'B')
+        expect(bSections.length).toBeGreaterThan(0)
+        for (const s of bSections) {
+          expect(CONTRAST_ROLES.has(s.role)).toBe(true)
+          expect(s.genome.tempo).toBe(theme.tempo)
+          expect(s.genome.scale).toEqual(theme.scale)
+          expect(s.genome.bars).toBe(theme.bars)
+          expect(s.genome.stepsPerBar).toBe(theme.stepsPerBar)
+          const m = contrastMetrics(theme, s.genome)
+          expect(m.chords).toBeGreaterThan(0)
+          if (theme.activeLayers.melody) expect(m.melody).toBeGreaterThan(0.3)
+        }
+        expect(evaluateSong(song.sections).score).toBeGreaterThan(0.8)
+      }
+    }
+  })
+
+  it('varies B on its second appearance', () => {
+    const ch = getChannel('house')
+    const personality = channelPersonality(ch)
+    const state = createEvolutionState(channelSeed(ch), 11, { channelId: 'house', personality })
+    const song = composeSong(state, { template: channelSongTemplate(ch), length: 'medium', personality })
+    const drops = song.sections.filter((s) => s.role === 'drop')
+    expect(drops).toHaveLength(2)
+    expect(drops[1]!.genome).not.toEqual(drops[0]!.genome)
+  })
+
+  it('scores a song with no contrast or a flat form lower', () => {
+    const g = getSeed('electronic')
+    const flat: SongSection[] = [
+      { role: 'groove', bars: 8, energy: 0.6, genome: g, material: 'A' },
+      { role: 'groove', bars: 6, energy: 0.6, genome: g, material: 'A' },
+    ]
+    const s = evaluateSong(flat)
+    expect(s.contrast).toBe(0)
+    expect(s.form).toBeLessThan(1)
+    expect(s.score).toBeLessThan(0.5)
+  })
+
+  it('is deterministic for a seed', () => {
+    const g = getSeed('electronic')
+    expect(deriveContrast(g, 42).genome).toEqual(deriveContrast(g, 42).genome)
   })
 })
