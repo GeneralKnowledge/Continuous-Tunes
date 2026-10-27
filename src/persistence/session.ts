@@ -5,6 +5,7 @@
 import type { EvolutionState, EvolutionSnapshot } from '../evolution/engine'
 import { snapshotOf, restoreSnapshot } from '../evolution/engine'
 import type { MusicGenome } from '../music/genome'
+import { CHANNELS, EVOLVE_BAR_OPTIONS } from '../music/channels'
 
 export interface StorageBackend {
   getItem(key: string): string | null
@@ -51,7 +52,11 @@ export class LocalStorageBackend implements StorageBackend {
 
   setItem(key: string, value: string): void {
     if (typeof localStorage === 'undefined') return
-    localStorage.setItem(this.full(key), value)
+    try {
+      localStorage.setItem(this.full(key), value)
+    } catch {
+      // Quota exceeded or storage disabled (e.g. private mode) — persistence is best-effort
+    }
   }
 
   removeItem(key: string): void {
@@ -90,7 +95,17 @@ export function loadSession(backend: StorageBackend): AppSession | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as AppSession
-    if (parsed.version !== 1) return null
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      !CHANNELS.some((c) => c.id === parsed.activeChannelId) ||
+      typeof parsed.rngSeed !== 'number' ||
+      !Number.isFinite(parsed.rngSeed) ||
+      !(EVOLVE_BAR_OPTIONS as readonly number[]).includes(parsed.evolveEveryBars) ||
+      typeof parsed.evolutionRunning !== 'boolean'
+    ) {
+      return null
+    }
     return parsed
   } catch {
     return null

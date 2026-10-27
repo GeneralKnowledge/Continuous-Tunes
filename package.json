@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
@@ -25,8 +26,8 @@
     "oxlint": "^1.81.0",
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.2"
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   },
   "description": "Autonomous generative music system using Strudel"
 }

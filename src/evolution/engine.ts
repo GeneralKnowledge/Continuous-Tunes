@@ -1,6 +1,7 @@
 import { createRng } from '../lib/rng'
 import { cloneGenome, genomesEqual, type MusicGenome } from '../music/genome'
 import { applyChannelFingerprint } from '../music/fingerprint'
+import { isValidGenome, validateGenome } from '../music/validation'
 import type { Personality } from '../music/personality'
 import { evaluateFitness, type FitnessResult } from './fitness'
 import {
@@ -244,6 +245,7 @@ export function setBookmark(state: EvolutionState, index: number | null): Evolut
 
 /**
  * Rewind genome/fitness to a generation still in bounded history.
+ * Later records are dropped so generation numbers stay unique after evolution resumes.
  * Keeps RNG state so future evolution continues (does not time-travel RNG).
  */
 export function rewindToGeneration(state: EvolutionState, index: number): EvolutionState | null {
@@ -251,6 +253,12 @@ export function rewindToGeneration(state: EvolutionState, index: number): Evolut
   if (!record) return null
   return {
     ...state,
+    history: {
+      ...state.history,
+      records: state.history.records.filter((r) => r.index <= index),
+    },
+    bookmarkIndex:
+      state.bookmarkIndex !== null && state.bookmarkIndex > index ? null : state.bookmarkIndex,
     generationIndex: record.index,
     genome: cloneGenome(record.genome),
     previousFitness: state.fitness.score,
@@ -273,16 +281,45 @@ export function snapshotOf(state: EvolutionState): EvolutionSnapshot {
   return { version: 1, state }
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+/**
+ * Restore a persisted snapshot. Throws on anything malformed so callers can fall back
+ * to a fresh state instead of feeding bad data to the compiler.
+ */
 export function restoreSnapshot(raw: unknown): EvolutionState {
   const snap = raw as EvolutionSnapshot
   if (!snap || snap.version !== 1 || !snap.state) {
     throw new Error('Invalid evolution snapshot')
   }
-  // Back-compat for older snapshots missing new fields
   const s = snap.state
+  if (
+    !Number.isInteger(s.generationIndex) ||
+    !isFiniteNumber(s.rngSeed) ||
+    !isFiniteNumber(s.rngState) ||
+    !Number.isInteger(s.stagnationStreak) ||
+    !s.fitness ||
+    !isFiniteNumber(s.fitness.score) ||
+    !s.history ||
+    !Array.isArray(s.history.records) ||
+    !Number.isInteger(s.history.maxSize)
+  ) {
+    throw new Error('Invalid evolution snapshot')
+  }
+  const genome = validateGenome(s.genome)
+  const records = s.history.records.filter(
+    (r) => r && Number.isInteger(r.index) && isFiniteNumber(r.fitness) && isValidGenome(r.genome),
+  )
+  // Back-compat for older snapshots missing new fields
   return {
     ...s,
-    previousFitness: s.previousFitness ?? s.fitness.score,
-    bookmarkIndex: s.bookmarkIndex ?? null,
+    genome,
+    history: { ...s.history, records },
+    previousFitness: isFiniteNumber(s.previousFitness) ? s.previousFitness : s.fitness.score,
+    bookmarkIndex: Number.isInteger(s.bookmarkIndex) ? s.bookmarkIndex : null,
+    lastMutationName: String(s.lastMutationName ?? ''),
+    lastDescription: String(s.lastDescription ?? ''),
   }
 }

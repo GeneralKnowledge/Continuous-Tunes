@@ -13,7 +13,7 @@ import {
   setBookmark,
   type EvolutionState,
 } from '../evolution/engine'
-import { createContinuousController } from '../evolution/continuous'
+import { createContinuousController, type ContinuousController } from '../evolution/continuous'
 import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
 import {
@@ -143,6 +143,13 @@ export function App() {
     [channelId, rngSeed, evolveEvery, evolving],
   )
 
+  const reportAudioError = useCallback((e: unknown) => {
+    setAudioStatus('error')
+    setLog((prev) =>
+      [`audio error: ${e instanceof Error ? e.message : String(e)}`, ...prev].slice(0, 20),
+    )
+  }, [])
+
   const refreshAudio = useCallback(async (genome = stateRef.current.genome) => {
     try {
       const result = await playerRef.current.playGenome(genome, mutesRef.current)
@@ -154,12 +161,9 @@ export function App() {
         setLog((prev) => ['audio: recovered last good genome', ...prev].slice(0, 20))
       }
     } catch (e) {
-      setAudioStatus('error')
-      setLog((prev) =>
-        [`audio error: ${e instanceof Error ? e.message : String(e)}`, ...prev].slice(0, 20),
-      )
+      reportAudioError(e)
     }
-  }, [])
+  }, [reportAudioError])
 
   const makeController = useCallback(() => {
     return createContinuousController({
@@ -187,22 +191,29 @@ export function App() {
         const code = compileGenome(s.genome, mutesRef.current)
         setCompiled(code)
         if (changed && playerRef.current.isPlaying()) {
-          void playerRef.current.playGenome(s.genome, mutesRef.current).then((r) => {
-            setCompiled(r.code)
-            if (r.recovered) flash('evaluate failed — restored last good pattern')
-          })
+          void playerRef.current
+            .playGenome(s.genome, mutesRef.current)
+            .then((r) => {
+              setCompiled(r.code)
+              if (r.recovered) flash('evaluate failed — restored last good pattern')
+            })
+            .catch(reportAudioError)
         }
       },
     })
-  }, [evolveEvery])
+  }, [evolveEvery, reportAudioError])
 
-  const controllerRef = useRef(makeController())
+  // Lazily created: useRef(makeController()) would build (and leak) a controller every render
+  const controllerRef = useRef<ContinuousController | null>(null)
+  if (controllerRef.current === null) controllerRef.current = makeController()
+  const controller = () => controllerRef.current!
 
   useEffect(() => {
-    controllerRef.current.dispose()
-    controllerRef.current = makeController()
-    if (evolving) controllerRef.current.start()
-    return () => controllerRef.current.dispose()
+    controller().dispose()
+    const ctrl = makeController()
+    controllerRef.current = ctrl
+    if (evolving) ctrl.start()
+    return () => ctrl.dispose()
   }, [makeController, evolving, channelId])
 
   // Resume evolution flag from session (controller starts via effect above)
@@ -216,8 +227,8 @@ export function App() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setBarsLeft(controllerRef.current.getBarsRemaining())
-      setWakeLock(controllerRef.current.getWakeLockActive())
+      setBarsLeft(controller().getBarsRemaining())
+      setWakeLock(controller().getWakeLockActive())
       setAudioStatus(playerRef.current.status())
     }, 400)
     return () => clearInterval(id)
@@ -232,13 +243,13 @@ export function App() {
     const code = compileGenome(stateRef.current.genome, mutes)
     setCompiled(code)
     if (playerRef.current.isPlaying()) {
-      void playerRef.current.playCode(code)
+      void playerRef.current.playCode(code).catch(reportAudioError)
     }
-  }, [mutes])
+  }, [mutes, reportAudioError])
 
   const switchChannel = (id: string) => {
     const wasEvolving = evolving
-    controllerRef.current.stop()
+    controller().stop()
     setEvolving(false)
     playerRef.current.stop()
     setPlaying(false)
@@ -255,6 +266,14 @@ export function App() {
     }
     saveSession(storage, sessionRef.current)
     if (wasEvolving) setEvolving(true)
+  }
+
+  /** New seed reseeds the current lineage's RNG; the genome itself is kept. */
+  const onSeedChange = (seed: number) => {
+    setRngSeed(seed)
+    const next = { ...stateRef.current, rngSeed: seed, rngState: seed >>> 0 }
+    stateRef.current = next
+    setState(next)
   }
 
   const onPlay = async () => {
@@ -275,19 +294,19 @@ export function App() {
 
   const onStopEvolution = () => {
     setEvolving(false)
-    controllerRef.current.stop()
+    controller().stop()
     sessionRef.current = { ...sessionRef.current, evolutionRunning: false }
     saveSession(storage, sessionRef.current)
   }
 
   const onMutate = async () => {
-    const next = controllerRef.current.mutateOnce()
+    const next = controller().mutateOnce()
     setCompiled(compileGenome(next.genome, mutesRef.current))
     if (playing) await refreshAudio(next.genome)
   }
 
   const onResetChannel = () => {
-    controllerRef.current.stop()
+    controller().stop()
     setEvolving(false)
     playerRef.current.stop()
     setPlaying(false)
@@ -306,7 +325,7 @@ export function App() {
   }
 
   const onClearAll = () => {
-    controllerRef.current.stop()
+    controller().stop()
     setEvolving(false)
     playerRef.current.stop()
     setPlaying(false)
@@ -402,7 +421,7 @@ export function App() {
           <input
             type="number"
             value={rngSeed}
-            onChange={(e) => setRngSeed(Number.parseInt(e.target.value, 10) || 0)}
+            onChange={(e) => onSeedChange(Number.parseInt(e.target.value, 10) || 0)}
           />
         </label>
 

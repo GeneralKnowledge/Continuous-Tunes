@@ -26,19 +26,17 @@ export interface LayerMutes {
   chords?: boolean
 }
 
-function degreeToPc(root: number, mode: ScaleMode, degree: number): number {
-  const intervals = MODE_INTERVALS[mode]
-  const idx = ((degree % intervals.length) + intervals.length) % intervals.length
-  return (root + intervals[idx]!) % 12
-}
-
-function noteName(pc: number, octave: number): string {
-  return `${NOTE_NAMES[pc]!}${octave}`
-}
-
+/**
+ * Scale degree → note name. Degrees past the end of the scale move up an octave,
+ * and pitch classes that pass B roll into the next octave so the scale always ascends.
+ */
 function scaleDegreeNote(genome: MusicGenome, degree: number, octave: number): string {
-  const pc = degreeToPc(genome.scale.root, genome.scale.mode, degree)
-  return noteName(pc, octave)
+  const intervals = MODE_INTERVALS[genome.scale.mode]
+  const len = intervals.length
+  const idx = ((degree % len) + len) % len
+  const octaveShift = Math.floor(degree / len)
+  const semis = genome.scale.root + intervals[idx]! + 12 * (octave + octaveShift)
+  return `${NOTE_NAMES[semis % 12]!}${Math.floor(semis / 12)}`
 }
 
 function boolToMini(steps: boolean[], hit: string): string {
@@ -59,13 +57,7 @@ function chordNotesMini(genome: MusicGenome): string {
   for (let bar = 0; bar < genome.bars; bar++) {
     const rootDeg = progression[bar] ?? 0
     const intervals = VOICING_INTERVALS[voicing]
-    const chordTones = intervals.map((degOff) => {
-      const deg = rootDeg + degOff
-      const intervalsMode = MODE_INTERVALS[genome.scale.mode]
-      const octBoost = Math.floor(deg / intervalsMode.length)
-      const d = ((deg % intervalsMode.length) + intervalsMode.length) % intervalsMode.length
-      return scaleDegreeNote(genome, d, 3 + octBoost)
-    })
+    const chordTones = intervals.map((degOff) => scaleDegreeNote(genome, rootDeg + degOff, 3))
     const chordToken = `[${chordTones.join(',')}]`
     for (let s = 0; s < stepsPerBar; s++) {
       const global = bar * stepsPerBar + s
