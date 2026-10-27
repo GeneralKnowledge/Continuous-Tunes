@@ -546,14 +546,17 @@ function pickOp(
     const layer = CATEGORY_LAYER[op.category]
     return layer === undefined || genome.activeLayers[layer]
   })
-  const weights = eligible.map((op) => Math.max(0.01, config.categoryWeights[op.category]))
+  // A zero weight switches a category off (e.g. tempo and key inside a song)
+  let weights = eligible.map((op) => Math.max(0, config.categoryWeights[op.category]))
+  if (weights.every((w) => w === 0)) weights = eligible.map(() => 1)
   const total = weights.reduce((a, b) => a + b, 0)
   let r = rng.next() * total
   for (let i = 0; i < eligible.length; i++) {
+    if (weights[i] === 0) continue
     r -= weights[i]!
     if (r <= 0) return eligible[i]!
   }
-  return eligible[eligible.length - 1]!
+  return eligible[weights.findLastIndex((w) => w > 0)]!
 }
 
 /**
@@ -594,11 +597,20 @@ export function mutate(
     }
   }
 
-  // Guaranteed no-op-safe fallback: ChangeTempo by ±1
+  // Guaranteed no-op-safe fallback: nudge tempo by ±1, or swing when tempo is frozen (inside a song)
   const g = cloneGenome(genome)
-  g.tempo = clamp(g.tempo + (rng.chance(0.5) ? 1 : -1), TEMPO_MIN, TEMPO_MAX)
+  if (config.categoryWeights.tempo > 0) {
+    g.tempo = clamp(g.tempo + (rng.chance(0.5) ? 1 : -1), TEMPO_MIN, TEMPO_MAX)
+    validateGenome(g)
+    return { genome: g, mutationName: 'ChangeTempo', description: `tempo=${g.tempo} (fallback)` }
+  }
+  g.parameters.swing = clamp(g.parameters.swing + (rng.chance(0.5) ? 0.02 : -0.02), 0, 1)
   validateGenome(g)
-  return { genome: g, mutationName: 'ChangeTempo', description: `tempo=${g.tempo} (fallback)` }
+  return {
+    genome: g,
+    mutationName: 'ChangeSwing',
+    description: `swing=${g.parameters.swing.toFixed(2)} (fallback)`,
+  }
 }
 
 /**

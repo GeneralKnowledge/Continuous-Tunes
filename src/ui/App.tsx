@@ -1,20 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   CHANNELS,
-  EVOLVE_BAR_OPTIONS,
   channelPersonality,
   channelSeed,
+  channelSongTemplate,
   getChannel,
-  type EvolveBars,
 } from '../music/channels'
+import { SECTION_LABELS, SONG_LENGTHS, type SectionRole, type SongLength } from '../music/form'
 import {
   createEvolutionState,
   rewindToGeneration,
   setBookmark,
+  stepGeneration,
   type EvolutionState,
 } from '../evolution/engine'
 import { evaluateFitness } from '../evolution/fitness'
-import { createContinuousController, type ContinuousController } from '../evolution/continuous'
+import { createSongController, type NowPlaying, type SongController } from '../evolution/songs'
 import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
 import {
@@ -43,7 +44,7 @@ function defaultSession(): AppSession {
     version: 1,
     activeChannelId: 'electronic',
     rngSeed: 42,
-    evolveEveryBars: 8,
+    songLength: 'medium',
     evolutionRunning: false,
   }
 }
@@ -96,19 +97,18 @@ async function copyText(label: string, text: string): Promise<string> {
 }
 
 export function App() {
-  const sessionRef = useRef<AppSession>(loadSession(storage) ?? defaultSession())
-  const [channelId, setChannelId] = useState(sessionRef.current.activeChannelId)
-  const [rngSeed, setRngSeed] = useState(sessionRef.current.rngSeed)
-  const [evolveEvery, setEvolveEvery] = useState<EvolveBars>(
-    sessionRef.current.evolveEveryBars as EvolveBars,
-  )
+  const [initialSession] = useState<AppSession>(() => loadSession(storage) ?? defaultSession())
+  const sessionRef = useRef(initialSession)
+  const [channelId, setChannelId] = useState(initialSession.activeChannelId)
+  const [rngSeed, setRngSeed] = useState(initialSession.rngSeed)
+  const [songLength, setSongLength] = useState<SongLength>(initialSession.songLength)
   const [state, setState] = useState<EvolutionState>(() =>
-    bootState(sessionRef.current.activeChannelId, sessionRef.current.rngSeed),
+    bootState(initialSession.activeChannelId, initialSession.rngSeed),
   )
   const [playing, setPlaying] = useState(false)
-  const [evolving, setEvolving] = useState(sessionRef.current.evolutionRunning)
+  const [evolving, setEvolving] = useState(initialSession.evolutionRunning)
   const [audioStatus, setAudioStatus] = useState('idle')
-  const [barsLeft, setBarsLeft] = useState(0)
+  const [nowPlaying, setNowPlaying] = useState<NowPlaying | null>(null)
   const [wakeLock, setWakeLock] = useState(false)
   const [mutes, setMutes] = useState<LayerMutes>({ ...DEFAULT_MUTES })
   const [compiled, setCompiled] = useState(() => compileGenome(state.genome))
@@ -118,8 +118,12 @@ export function App() {
   const playerRef = useRef(createStrudelPlayer())
   const stateRef = useRef(state)
   const mutesRef = useRef(mutes)
-  stateRef.current = state
-  mutesRef.current = mutes
+  const songLengthRef = useRef(songLength)
+  useLayoutEffect(() => {
+    stateRef.current = state
+    mutesRef.current = mutes
+    songLengthRef.current = songLength
+  }, [state, mutes, songLength])
 
   const channel = getChannel(channelId)
   const personality = channelPersonality(channel)
@@ -130,6 +134,8 @@ export function App() {
     window.setTimeout(() => setToast(null), 1800)
   }
 
+  const addLog = (line: string) => setLog((prev) => [line, ...prev].slice(0, 20))
+
   const persist = useCallback(
     (next: EvolutionState, sess?: Partial<AppSession>) => {
       saveChannelState(storage, channelId, next)
@@ -137,14 +143,14 @@ export function App() {
         ...sessionRef.current,
         activeChannelId: channelId,
         rngSeed,
-        evolveEveryBars: evolveEvery,
+        songLength,
         evolutionRunning: evolving,
         ...sess,
       }
       sessionRef.current = session
       saveSession(storage, session)
     },
-    [channelId, rngSeed, evolveEvery, evolving],
+    [channelId, rngSeed, songLength, evolving],
   )
 
   const reportAudioError = useCallback((e: unknown) => {
@@ -154,6 +160,7 @@ export function App() {
     )
   }, [])
 
+  /** Play the current genome as a plain loop (evolution off). */
   const refreshAudio = useCallback(async (genome = stateRef.current.genome) => {
     try {
       const result = await playerRef.current.playGenome(genome, mutesRef.current)
@@ -169,107 +176,138 @@ export function App() {
     }
   }, [reportAudioError])
 
-  const makeController = useCallback(() => {
-    return createContinuousController({
-      evolveEveryBars: evolveEvery,
-      getTempo: () => stateRef.current.genome.tempo,
-      getState: () => stateRef.current,
-      setState: (s) => {
-        stateRef.current = s
-        setState(s)
-      },
-      personality: () => channelPersonality(getChannel(sessionRef.current.activeChannelId)),
-      config: () => ({
-        candidatesPerGeneration: getChannel(sessionRef.current.activeChannelId)
-          .candidatesPerGeneration,
+  // Created once; reads everything that changes through refs
+  const makeSongs = useCallback(
+    () =>
+      createSongController({
+        getState: () => stateRef.current,
+        setState: (s) => {
+          stateRef.current = s
+          setState(s)
+        },
+        now: () => playerRef.current.now(),
+        play: (code) =>
+          playerRef.current.playCode(code).then((r) => {
+            setCompiled(r.code)
+            if (r.recovered) flash('evaluate failed — restored last good pattern')
+          }),
+        template: () => channelSongTemplate(getChannel(sessionRef.current.activeChannelId)),
+        length: () => songLengthRef.current,
+        personality: () => channelPersonality(getChannel(sessionRef.current.activeChannelId)),
+        config: () => ({
+          candidatesPerGeneration: getChannel(sessionRef.current.activeChannelId)
+            .candidatesPerGeneration,
+        }),
+        mutes: () => mutesRef.current,
+        onComposed: (song, s) => {
+          const bars = song.sections.reduce((a, x) => a + x.bars, 0)
+          setLog((prev) =>
+            [
+              `song ${song.number}: ${song.sections.length} sections, ${bars} bars, gens ${song.startGeneration}–${s.generationIndex}, fit=${s.fitness.score.toFixed(3)}`,
+              ...prev,
+            ].slice(0, 20),
+          )
+          saveChannelState(storage, sessionRef.current.activeChannelId, s)
+        },
+        onError: (e) => reportAudioError(e),
       }),
-      onEvolved: (s, changed) => {
-        const delta = s.fitness.score - s.previousFitness
-        setLog((prev) =>
-          [
-            `gen ${s.generationIndex}: ${s.lastMutationName} (${s.lastDescription}) fit=${s.fitness.score.toFixed(3)} ${formatDelta(delta)}`,
-            ...prev,
-          ].slice(0, 20),
-        )
-        saveChannelState(storage, sessionRef.current.activeChannelId, s)
-        const code = compileGenome(s.genome, mutesRef.current)
-        setCompiled(code)
-        if (changed && playerRef.current.isPlaying()) {
-          void playerRef.current
-            .playGenome(s.genome, mutesRef.current)
-            .then((r) => {
-              setCompiled(r.code)
-              if (r.recovered) flash('evaluate failed — restored last good pattern')
-            })
-            .catch(reportAudioError)
-        }
-      },
-    })
-  }, [evolveEvery, reportAudioError])
+    [reportAudioError],
+  )
+  const songsRef = useRef<SongController | null>(null)
+  // Built on first use (from an effect or handler), never during render
+  const songs = useCallback(() => (songsRef.current ??= makeSongs()), [makeSongs])
 
-  // Lazily created: useRef(makeController()) would build (and leak) a controller every render
-  const controllerRef = useRef<ContinuousController | null>(null)
-  if (controllerRef.current === null) controllerRef.current = makeController()
-  const controller = () => controllerRef.current!
-
-  useEffect(() => {
-    controller().dispose()
-    const ctrl = makeController()
-    controllerRef.current = ctrl
-    if (evolving) ctrl.start()
-    return () => ctrl.dispose()
-  }, [makeController, evolving, channelId])
-
-  // Resume evolution flag from session (controller starts via effect above)
-  useEffect(() => {
-    if (sessionRef.current.evolutionRunning) {
-      setEvolving(true)
-    }
-    // once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useEffect(() => () => songs().dispose(), [songs])
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setBarsLeft(controller().getBarsRemaining())
-      setWakeLock(controller().getWakeLockActive())
+      setNowPlaying(songs().nowPlaying())
       setAudioStatus(playerRef.current.status())
     }, 400)
     return () => clearInterval(id)
-  }, [])
+  }, [songs])
+
+  // Keep the screen awake while music plays
+  useEffect(() => {
+    if (!playing || typeof navigator === 'undefined' || !('wakeLock' in navigator)) return
+    let sentinel: WakeLockSentinel | null = null
+    let cancelled = false
+    const request = () => {
+      navigator.wakeLock
+        .request('screen')
+        .then((s) => {
+          if (cancelled) void s.release()
+          else {
+            sentinel = s
+            setWakeLock(true)
+            s.addEventListener('release', () => setWakeLock(false))
+          }
+        })
+        .catch(() => setWakeLock(false))
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && sentinel === null) request()
+    }
+    request()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+      void sentinel?.release()
+      setWakeLock(false)
+    }
+  }, [playing])
 
   useEffect(() => {
     persist(state)
   }, [state, persist])
 
-  // Recompile when mutes change; refresh audio if playing
+  // Re-send the music when mutes change
   useEffect(() => {
+    if (songs().isRunning()) {
+      songs().refresh()
+      return
+    }
     const code = compileGenome(stateRef.current.genome, mutes)
     setCompiled(code)
     if (playerRef.current.isPlaying()) {
       void playerRef.current.playCode(code).catch(reportAudioError)
     }
-  }, [mutes, reportAudioError])
+  }, [mutes, reportAudioError, songs])
 
-  const switchChannel = (id: string) => {
-    const wasEvolving = evolving
-    controller().stop()
-    setEvolving(false)
+  /** Start songs (evolution on) or the plain loop (evolution off). */
+  const startMusic = async (withSongs: boolean) => {
+    songs().stop()
+    if (!withSongs) {
+      await refreshAudio()
+      return
+    }
+    try {
+      await playerRef.current.init()
+      songs().start()
+      setPlaying(true)
+    } catch (e) {
+      reportAudioError(e)
+    }
+  }
+
+  const stopMusic = () => {
+    songs().stop()
     playerRef.current.stop()
     setPlaying(false)
+    setNowPlaying(null)
+  }
+
+  const switchChannel = (id: string) => {
+    stopMusic()
     setChannelId(id)
     const next = bootState(id, rngSeed)
     stateRef.current = next
     setState(next)
     setCompiled(compileGenome(next.genome, mutesRef.current))
     setMutes({ ...DEFAULT_MUTES })
-    sessionRef.current = {
-      ...sessionRef.current,
-      activeChannelId: id,
-      evolutionRunning: wasEvolving,
-    }
+    sessionRef.current = { ...sessionRef.current, activeChannelId: id }
     saveSession(storage, sessionRef.current)
-    if (wasEvolving) setEvolving(true)
   }
 
   /** New seed reseeds the current lineage's RNG; the genome itself is kept. */
@@ -281,12 +319,11 @@ export function App() {
   }
 
   const onPlay = async () => {
-    await refreshAudio()
+    await startMusic(evolving)
   }
 
   const onPause = () => {
-    playerRef.current.stop()
-    setPlaying(false)
+    stopMusic()
     setAudioStatus(playerRef.current.status())
   }
 
@@ -294,26 +331,44 @@ export function App() {
     setEvolving(true)
     sessionRef.current = { ...sessionRef.current, evolutionRunning: true }
     saveSession(storage, sessionRef.current)
+    if (playing) void startMusic(true)
   }
 
   const onStopEvolution = () => {
     setEvolving(false)
-    controller().stop()
     sessionRef.current = { ...sessionRef.current, evolutionRunning: false }
     saveSession(storage, sessionRef.current)
+    if (playing) void startMusic(false)
+  }
+
+  /** Manual edits to the genome play at once in loop mode, or from the next song in song mode. */
+  const applyManual = async (next: EvolutionState) => {
+    stateRef.current = next
+    setState(next)
+    if (songs().isRunning()) {
+      flash('changes play from the next song')
+    } else {
+      setCompiled(compileGenome(next.genome, mutesRef.current))
+      if (playing) await refreshAudio(next.genome)
+    }
   }
 
   const onMutate = async () => {
-    const next = controller().mutateOnce()
-    setCompiled(compileGenome(next.genome, mutesRef.current))
-    if (playing) await refreshAudio(next.genome)
+    const result = stepGeneration(stateRef.current, {
+      personality,
+      config: { candidatesPerGeneration: channel.candidatesPerGeneration },
+      now: Date.now(),
+    })
+    const s = result.state
+    addLog(
+      `gen ${s.generationIndex}: ${s.lastMutationName} (${s.lastDescription}) fit=${s.fitness.score.toFixed(3)} ${formatDelta(result.fitnessDelta)}`,
+    )
+    await applyManual(s)
   }
 
   const onResetChannel = () => {
-    controller().stop()
+    stopMusic()
     setEvolving(false)
-    playerRef.current.stop()
-    setPlaying(false)
     clearChannel(storage, channelId)
     const next = createEvolutionState(channelSeed(channel), rngSeed, {
       personality,
@@ -329,16 +384,14 @@ export function App() {
   }
 
   const onClearAll = () => {
-    controller().stop()
+    stopMusic()
     setEvolving(false)
-    playerRef.current.stop()
-    setPlaying(false)
     clearAll(storage)
     const sess = defaultSession()
     sessionRef.current = sess
     setChannelId(sess.activeChannelId)
     setRngSeed(sess.rngSeed)
-    setEvolveEvery(sess.evolveEveryBars as EvolveBars)
+    setSongLength(sess.songLength)
     const next = bootState(sess.activeChannelId, sess.rngSeed)
     stateRef.current = next
     setState(next)
@@ -347,11 +400,15 @@ export function App() {
     setLog([])
   }
 
+  /** In song mode this keeps the playing song: its first generation is bookmarked. */
   const onBookmark = () => {
-    const next = setBookmark(state, state.generationIndex)
+    const index = nowPlaying?.song.startGeneration ?? state.generationIndex
+    const next = setBookmark(state, index)
     stateRef.current = next
     setState(next)
-    flash(`bookmarked gen ${state.generationIndex}`)
+    flash(
+      nowPlaying ? `kept song ${nowPlaying.song.number} (gen ${index})` : `bookmarked gen ${index}`,
+    )
   }
 
   const onRewindBookmark = async () => {
@@ -364,11 +421,8 @@ export function App() {
       flash('bookmark not in history (too old)')
       return
     }
-    stateRef.current = next
-    setState(next)
-    setCompiled(compileGenome(next.genome, mutesRef.current))
-    setLog((prev) => [`rewound to gen ${next.generationIndex}`, ...prev].slice(0, 20))
-    if (playing) await refreshAudio(next.genome)
+    addLog(`rewound to gen ${next.generationIndex}`)
+    await applyManual(next)
   }
 
   const onRewindPrev = async () => {
@@ -380,10 +434,7 @@ export function App() {
     }
     const next = rewindToGeneration(state, prev.index)
     if (!next) return
-    stateRef.current = next
-    setState(next)
-    setCompiled(compileGenome(next.genome, mutesRef.current))
-    if (playing) await refreshAudio(next.genome)
+    await applyManual(next)
   }
 
   const onCopyGenome = async () => {
@@ -430,14 +481,11 @@ export function App() {
         </label>
 
         <label>
-          Evolve every N bars
-          <select
-            value={evolveEvery}
-            onChange={(e) => setEvolveEvery(Number(e.target.value) as EvolveBars)}
-          >
-            {EVOLVE_BAR_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
+          Song length
+          <select value={songLength} onChange={(e) => setSongLength(e.target.value as SongLength)}>
+            {SONG_LENGTHS.map((l) => (
+              <option key={l} value={l}>
+                {l}
               </option>
             ))}
           </select>
@@ -461,7 +509,7 @@ export function App() {
           Mutate
         </button>
         <button type="button" onClick={onBookmark}>
-          Bookmark
+          {nowPlaying ? 'Keep this song' : 'Bookmark'}
         </button>
         <button type="button" onClick={() => void onRewindBookmark()}>
           Rewind bookmark
@@ -497,6 +545,40 @@ export function App() {
         ))}
       </section>
 
+      <section className="song">
+        {nowPlaying ? (
+          <>
+            <strong>
+              Song {nowPlaying.song.number} ·{' '}
+              {
+                SECTION_LABELS[
+                  nowPlaying.song.sections[nowPlaying.position.sectionIndex]!.role as SectionRole
+                ]
+              }{' '}
+              · {nowPlaying.position.barsLeftInSection} bars left
+            </strong>
+            <ol className="song-strip">
+              {nowPlaying.song.sections.map((sec, i) => (
+                <li
+                  key={i}
+                  className={i === nowPlaying.position.sectionIndex ? 'current' : undefined}
+                  style={{ flexGrow: sec.bars }}
+                  title={`${sec.bars} bars, energy ${sec.energy}${sec.energyEnd !== undefined ? `→${sec.energyEnd}` : ''}`}
+                >
+                  {SECTION_LABELS[sec.role as SectionRole]}
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <span className="song-idle">
+            {evolving
+              ? 'Press Play to start songs. Each song runs through its sections while the music evolves.'
+              : 'Evolution is off: Play loops the current pattern.'}
+          </span>
+        )}
+      </section>
+
       <section className="now-playing">
         <strong>Now</strong>
         <span>
@@ -511,7 +593,7 @@ export function App() {
       <section className="status">
         <div>Audio: {audioStatus}{playing ? '' : ''}</div>
         <div>Evolution: {evolving ? 'ON' : 'OFF'}</div>
-        <div>Bars left: {barsLeft}</div>
+        <div>Song bars left: {nowPlaying ? nowPlaying.position.barsLeftInSong : '–'}</div>
         <div>Wake lock: {wakeLock ? 'active' : 'off'}</div>
         <div>Stagnation streak: {state.stagnationStreak}</div>
         <div>Generation: {state.generationIndex}</div>
@@ -525,9 +607,7 @@ export function App() {
             {formatDelta(fitnessDelta)}
           </span>
         </div>
-        <div>
-          Bookmark: {state.bookmarkIndex === null ? 'none' : `gen ${state.bookmarkIndex}`}
-        </div>
+        <div>Bookmark: {state.bookmarkIndex === null ? 'none' : `gen ${state.bookmarkIndex}`}</div>
         <div>Pattern: {summarizeGenome(state.genome)}</div>
       </section>
 
@@ -555,8 +635,8 @@ export function App() {
 
       <footer>
         <p>
-          Tip: leave this tab audible for long runs. Browsers throttle background tabs — keep the
-          page visible if you want continuous evolution.
+          Tip: section and song changes run on the audio clock, so background tabs keep playing in
+          time. The next song is prepared halfway through the current one.
         </p>
       </footer>
     </div>

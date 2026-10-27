@@ -5,7 +5,8 @@
 import type { EvolutionState, EvolutionSnapshot } from '../evolution/engine'
 import { snapshotOf, restoreSnapshot } from '../evolution/engine'
 import type { MusicGenome } from '../music/genome'
-import { CHANNELS, EVOLVE_BAR_OPTIONS } from '../music/channels'
+import { CHANNELS } from '../music/channels'
+import { SONG_LENGTHS, type SongLength } from '../music/form'
 
 export interface StorageBackend {
   getItem(key: string): string | null
@@ -79,7 +80,7 @@ export interface AppSession {
   version: 1
   activeChannelId: string
   rngSeed: number
-  evolveEveryBars: number
+  songLength: SongLength
   evolutionRunning: boolean
 }
 
@@ -94,19 +95,28 @@ export function loadSession(backend: StorageBackend): AppSession | null {
   const raw = backend.getItem(SESSION_KEY)
   if (!raw) return null
   try {
-    const parsed = JSON.parse(raw) as AppSession
+    const parsed = JSON.parse(raw) as Partial<AppSession>
     if (
       !parsed ||
       parsed.version !== 1 ||
       !CHANNELS.some((c) => c.id === parsed.activeChannelId) ||
       typeof parsed.rngSeed !== 'number' ||
       !Number.isFinite(parsed.rngSeed) ||
-      !(EVOLVE_BAR_OPTIONS as readonly number[]).includes(parsed.evolveEveryBars) ||
       typeof parsed.evolutionRunning !== 'boolean'
     ) {
       return null
     }
-    return parsed
+    // Sessions saved before songs had "evolve every N bars" instead of a song length
+    const songLength = (SONG_LENGTHS as readonly string[]).includes(parsed.songLength ?? '')
+      ? parsed.songLength!
+      : 'medium'
+    return {
+      version: 1,
+      activeChannelId: parsed.activeChannelId!,
+      rngSeed: parsed.rngSeed,
+      songLength,
+      evolutionRunning: parsed.evolutionRunning,
+    }
   } catch {
     return null
   }

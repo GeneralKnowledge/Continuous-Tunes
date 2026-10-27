@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
-import { createContinuousController } from '../src/evolution/continuous'
+import { describe, expect, it } from 'vitest'
 import { createEvolutionState, stepGeneration } from '../src/evolution/engine'
 import { getSeed } from '../src/music/seeds'
 import {
@@ -40,7 +39,7 @@ describe('Persistence', () => {
       version: 1,
       activeChannelId: 'no-such-channel',
       rngSeed: 1,
-      evolveEveryBars: 8,
+      songLength: 'medium',
       evolutionRunning: false,
     })
     expect(loadSession(backend)).toBeNull()
@@ -52,12 +51,33 @@ describe('Persistence', () => {
       version: 1,
       activeChannelId: 'house',
       rngSeed: 99,
-      evolveEveryBars: 8,
+      songLength: 'medium',
       evolutionRunning: false,
     })
     const s = loadSession(backend)
     expect(s?.activeChannelId).toBe('house')
     expect(s?.rngSeed).toBe(99)
+  })
+
+  it('migrates a session saved before songs (evolve every N bars)', () => {
+    const backend = new MemoryStorage()
+    backend.setItem(
+      'session',
+      JSON.stringify({
+        version: 1,
+        activeChannelId: 'house',
+        rngSeed: 3,
+        evolveEveryBars: 8,
+        evolutionRunning: true,
+      }),
+    )
+    expect(loadSession(backend)).toEqual({
+      version: 1,
+      activeChannelId: 'house',
+      rngSeed: 3,
+      songLength: 'medium',
+      evolutionRunning: true,
+    })
   })
 
   it('clearAll wipes keys', () => {
@@ -66,52 +86,10 @@ describe('Persistence', () => {
       version: 1,
       activeChannelId: 'minimal',
       rngSeed: 1,
-      evolveEveryBars: 4,
+      songLength: 'short',
       evolutionRunning: false,
     })
     clearAll(backend)
     expect(loadSession(backend)).toBeNull()
-  })
-})
-
-describe('Continuous controller', () => {
-  it('evolves on deadline with fake timers', () => {
-    vi.useFakeTimers()
-    let clock = 0
-    let state = createEvolutionState(getSeed('minimal'), 5)
-    let evolutions = 0
-
-    const ctrl = createContinuousController({
-      evolveEveryBars: 4,
-      getTempo: () => 120, // 4 bars = 8 seconds at 120bpm
-      getState: () => state,
-      setState: (s) => {
-        state = s
-      },
-      onEvolved: () => {
-        evolutions++
-      },
-      now: () => clock,
-      setTimeoutFn: (fn, ms) =>
-        setTimeout(() => {
-          clock += ms
-          fn()
-        }, ms),
-      clearTimeoutFn: clearTimeout,
-    })
-
-    ctrl.start()
-    expect(ctrl.isRunning()).toBe(true)
-
-    // Advance enough fake time for at least one evolution
-    // At 120bpm, 4 bars = 8000ms; our timer polls every 250ms
-    for (let i = 0; i < 40; i++) {
-      vi.advanceTimersByTime(250)
-    }
-
-    expect(evolutions).toBeGreaterThanOrEqual(1)
-    ctrl.stop()
-    ctrl.dispose()
-    vi.useRealTimers()
   })
 })

@@ -223,3 +223,42 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+.song {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.song-idle {
+  color: var(--muted);
+}
+
+.song-strip {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+
+.song-strip li {
+  flex-basis: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--track);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.song-strip li.current {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 25%, var(--track));
+}
