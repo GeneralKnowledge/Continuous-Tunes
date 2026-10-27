@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_MUTATION_CONFIG,
   intensityWithStagnation,
+  mergeMutationConfig,
   mutate,
   mutateN,
   pickIntensity,
@@ -129,8 +130,10 @@ export function stepGeneration(
   }
 
   const rng = createRng(state.rngState)
+  // Personality weights and intensity bias are merged once here; mutate() gets no personality
+  // so they aren't applied twice, and the stagnation boost applies on top of the bias.
   const mutConfig = intensityWithStagnation(
-    config.mutation,
+    mergeMutationConfig(config.mutation, options?.personality),
     state.stagnationStreak,
     config.selection.stagnationLimit,
   )
@@ -147,12 +150,10 @@ export function stepGeneration(
         ? mutateN(state.genome, rng, mutCount, {
             intensity,
             config: mutConfig,
-            personality: options?.personality,
           })
         : mutate(state.genome, rng, {
             intensity,
             config: mutConfig,
-            personality: options?.personality,
           })
     const fingerprinted =
       state.channelId !== undefined

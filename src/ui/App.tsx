@@ -13,6 +13,7 @@ import {
   setBookmark,
   type EvolutionState,
 } from '../evolution/engine'
+import { evaluateFitness } from '../evolution/fitness'
 import { createContinuousController, type ContinuousController } from '../evolution/continuous'
 import { compileGenome, summarizeGenome, type LayerMutes } from '../strudel/compiler'
 import { createStrudelPlayer } from '../strudel/player'
@@ -51,9 +52,12 @@ function bootState(channelId: string, seed: number): EvolutionState {
   const channel = getChannel(channelId)
   const existing = loadChannelState(storage, channelId)
   if (existing) {
+    // Re-score with the current fitness so saved scores from older versions don't skew selection
+    const fitness = evaluateFitness(existing.genome, channelPersonality(channel))
     return {
       ...existing,
-      previousFitness: existing.previousFitness ?? existing.fitness.score,
+      fitness,
+      previousFitness: fitness.score,
       bookmarkIndex: existing.bookmarkIndex ?? null,
     }
   }
