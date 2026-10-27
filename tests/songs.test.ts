@@ -9,6 +9,7 @@ import { getSeed } from '../src/music/seeds'
 import {
   compileGenome,
   compileTimeline,
+  levelForEnergy,
   renderForSection,
   sectionTransition,
   songBars,
@@ -117,6 +118,22 @@ describe('Song rendering', () => {
     })
   })
 
+  it('plays quiet sections quieter and ramps the level across a build', () => {
+    expect(levelForEnergy(1)).toBe(1)
+    // about 7.5 dB below a drop
+    expect(20 * Math.log10(levelForEnergy(0.3))).toBeLessThan(-7)
+    expect(renderForSection('build', 0.6, 0.9, 8).level).toEqual({
+      from: levelForEnergy(0.6),
+      to: levelForEnergy(0.9),
+    })
+    const g = getSeed('electronic')
+    const code = compileTimeline(
+      [{ startCycle: 0, sections: [{ role: 'build', bars: 8, energy: 0.6, energyEnd: 0.9, genome: g }] }],
+      g.tempo,
+    )
+    expect(code).toContain(`.velocity(saw.range(${levelForEnergy(0.6)}, ${levelForEnergy(0.9)}).slow(8))`)
+  })
+
   it('sweeps the filter across a build', () => {
     const r = renderForSection('build', 0.6, 0.9, 8)
     expect(r.sweep).toEqual({ from: expect.any(Number), to: expect.any(Number), bars: 8 })
@@ -173,7 +190,7 @@ describe('Song rendering', () => {
     expect(code.match(/\[24, song0\]/g)).toHaveLength(2)
     expect(code).toContain('const song0 = arrange(')
     // intro: 7 bars, then a snare roll into the drop; drop: a crash bar, then the rest
-    expect(code).toContain('[7, stack(song0s0d, song0s0t)]')
+    expect(code).toContain('[7, stack(song0s0d, song0s0t).velocity(0.415)]')
     expect(code).toMatch(/\[1, stack\(song0s0t, /)
     expect(code).toMatch(/\[1, stack\(song0s1d, song0s1t, s\("cr"\)/)
     expect(code).toMatch(/\[15, stack\(song0s1d, song0s1t\)\.early\(1\)\]/)
