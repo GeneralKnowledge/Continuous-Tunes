@@ -80,6 +80,8 @@ export interface RenderOptions {
   chordGain: number
   /** Whole-section filter sweep (builds, fades): cutoff from → to in Hz. */
   sweep?: { from: number; to: number; bars: number }
+  /** Section loudness as a velocity (multiplies every layer's gain), ramping from → to. */
+  level?: { from: number; to: number }
 }
 
 export const FULL_RENDER: RenderOptions = {
@@ -110,6 +112,11 @@ function cutoffForEnergy(e: number): number {
   return Math.round(300 + 4200 * e * e)
 }
 
+/** Energy → velocity: full energy plays at 1, energy 0.3 about 7.5 dB quieter. */
+export function levelForEnergy(e: number): number {
+  return Number((0.3 + 0.7 * Math.pow(Math.max(0, Math.min(1, e)), 1.5)).toFixed(3))
+}
+
 /**
  * Energy → arrangement. Low energy thins drums and drops layers; breakdowns lose kick and bass.
  * Ramping sections render at their higher energy and sweep the filter across the section.
@@ -128,6 +135,7 @@ export function renderForSection(role: string, energy: number, energyEnd: number
   if (energyEnd !== undefined && energyEnd !== energy) {
     opts.sweep = { from: cutoffForEnergy(energy), to: cutoffForEnergy(energyEnd), bars }
   }
+  opts.level = { from: levelForEnergy(energy), to: levelForEnergy(energyEnd ?? energy) }
   return opts
 }
 
@@ -363,7 +371,15 @@ function sectionSegments(
   const crash = t.crash && drumsAllowed ? [`s("cr").gain(0.5)`] : []
   const fill = t.fill && drumsAllowed && sec.bars > 1 ? t.fill : null
 
-  const sweep = opts.sweep ? `.lpf(${sweepSignal(opts.sweep)})` : ''
+  const level = opts.level
+  const velocity = !level
+    ? ''
+    : level.from === level.to
+      ? level.from === 1
+        ? ''
+        : `.velocity(${level.from})`
+      : `.velocity(saw.range(${level.from}, ${level.to}).slow(${sec.bars}))`
+  const sweep = `${opts.sweep ? `.lpf(${sweepSignal(opts.sweep)})` : ''}${velocity}`
   const shift = (bar: number) => (bar > 0 ? `.early(${bar})` : '')
   // Each loop is defined once as a constant and shared by the section's segments
   const define = (suffix: string, layers: string[]): string[] => {
