@@ -84,8 +84,11 @@ Probabilities live in **mutation config / personality weights**, not hardcoded a
 
 Evaluates the genome directly (no audio analysis):
 
-- repetition, density, rhythmicComplexity, melodicComplexity
-- harmonicConsistency, variety
+- **Harmony:** bass and melody notes on the beat are checked against the chord of their bar (downbeats count double); the progression is scored for common diatonic chords (I ii IV V vi)
+- **Density per layer:** each layer has its own target, so a busy melody can't hide behind sparse drums
+- **Repetition per layer:** drums should loop, bass grooves repeat in rhythm, melodies vary most
+- rhythmic complexity (off-beat hits, same meaning on 8- and 16-step grids), melodic complexity, mostly-stepwise melodies, variety
+- **Genre style:** each personality has a tempo range, bass/melody octave ranges, a swing ceiling and core layers; leaving them is penalised so channels keep their identity
 
 Scores against personality **sweet spots**. Penalises empty silence, wall-of-sound chaos, and total stasis. Transparent and tunable — not “more complexity = better”.
 

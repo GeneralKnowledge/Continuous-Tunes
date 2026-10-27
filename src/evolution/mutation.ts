@@ -9,7 +9,6 @@ import {
   TEMPO_MAX,
   TEMPO_MIN,
   cloneGenome,
-  totalSteps,
   type MusicGenome,
 } from '../music/genome'
 import type { MutationWeights, Personality } from '../music/personality'
@@ -49,15 +48,27 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n))
 }
 
-function resizeBool(arr: boolean[], len: number): boolean[] {
-  const out = arr.slice(0, len)
-  while (out.length < len) out.push(false)
-  return out
-}
-
-function resizeNotes(arr: (number | null)[], len: number): (number | null)[] {
-  const out = arr.slice(0, len)
-  while (out.length < len) out.push(null)
+/**
+ * Re-grid a step pattern to a new steps-per-bar / bar count, keeping each hit at the
+ * same musical position. 16→8 keeps the 8th-note steps; 8→16 places hits on even steps.
+ * Extra bars repeat the existing ones instead of going silent.
+ */
+function regrid<T>(
+  arr: T[],
+  fromSpb: number,
+  fromBars: number,
+  toSpb: number,
+  toBars: number,
+  empty: T,
+): T[] {
+  const out: T[] = []
+  for (let bar = 0; bar < toBars; bar++) {
+    const srcBar = bar % fromBars
+    for (let step = 0; step < toSpb; step++) {
+      const pos = (step * fromSpb) / toSpb
+      out.push(Number.isInteger(pos) ? (arr[srcBar * fromSpb + pos] ?? empty) : empty)
+    }
+  }
   return out
 }
 
@@ -80,7 +91,7 @@ export const DEFAULT_MUTATION_CONFIG: MutationConfig = {
     melody: 1,
     chords: 1,
     tempo: 0.6,
-    scale: 0.4,
+    scale: 0.15,
     layers: 0.5,
     parameters: 0.4,
   },
@@ -371,7 +382,8 @@ export const MUTATION_OPS: MutationOp[] = [
     minIntensity: 'moderate',
     apply(genome, rng) {
       const g = cloneGenome(genome)
-      g.scale.root = (g.scale.root + rng.int(1, 11)) % 12
+      // Modulate to a closely related key (up a fourth or a fifth), not a random jump
+      g.scale.root = (g.scale.root + rng.pick([5, 7])) % 12
       return {
         genome: g,
         mutationName: 'ChangeScaleRoot',
@@ -446,11 +458,13 @@ export const MUTATION_OPS: MutationOp[] = [
     apply(genome, rng) {
       const g = cloneGenome(genome)
       const spb = g.stepsPerBar
-      const bar = rng.int(0, g.bars - 1)
+      // A fill lives in the last quarter of the loop's final bar, leading back to the top.
+      // The region is rewritten, not added to, so repeated fills don't pile up.
+      const bar = g.bars - 1
       const start = bar * spb + Math.floor(spb * 0.75)
       for (let i = start; i < (bar + 1) * spb; i++) {
-        if (rng.chance(0.55)) g.drums.hihat[i] = true
-        if (rng.chance(0.35)) g.drums.snare[i] = true
+        g.drums.hihat[i] = rng.chance(0.5)
+        g.drums.snare[i] = rng.chance(0.35)
       }
       return {
         genome: g,
@@ -490,18 +504,20 @@ export const MUTATION_OPS: MutationOp[] = [
       const newSpb = rng.pick([...STEPS_PER_BAR_OPTIONS])
       const newBars = rng.pick([...BARS_OPTIONS])
       if (newSpb === g.stepsPerBar && newBars === g.bars) return null
+      const from = [g.stepsPerBar, g.bars] as const
+      const rg = <T>(arr: T[], empty: T) => regrid(arr, ...from, newSpb, newBars, empty)
+      g.drums.kick = rg(g.drums.kick, false)
+      g.drums.snare = rg(g.drums.snare, false)
+      g.drums.hihat = rg(g.drums.hihat, false)
+      g.bass.notes = rg(g.bass.notes, null)
+      g.melody.notes = rg(g.melody.notes, null)
+      g.chords.rhythm = rg(g.chords.rhythm, false)
+      g.chords.progression = Array.from(
+        { length: newBars },
+        (_, i) => g.chords.progression[i % g.bars]!,
+      )
       g.stepsPerBar = newSpb
       g.bars = newBars
-      const n = totalSteps(g)
-      g.drums.kick = resizeBool(g.drums.kick, n)
-      g.drums.snare = resizeBool(g.drums.snare, n)
-      g.drums.hihat = resizeBool(g.drums.hihat, n)
-      g.bass.notes = resizeNotes(g.bass.notes, n)
-      g.melody.notes = resizeNotes(g.melody.notes, n)
-      g.chords.rhythm = resizeBool(g.chords.rhythm, n)
-      const prog = g.chords.progression.slice(0, newBars)
-      while (prog.length < newBars) prog.push(rng.int(0, 5))
-      g.chords.progression = prog
       return {
         genome: g,
         mutationName: 'RestructureLength',
@@ -511,12 +527,25 @@ export const MUTATION_OPS: MutationOp[] = [
   },
 ]
 
+/** Categories that only edit one layer; mutating a silent layer changes nothing audible. */
+const CATEGORY_LAYER: Partial<Record<keyof MutationWeights, keyof MusicGenome['activeLayers']>> = {
+  rhythm: 'drums',
+  bass: 'bass',
+  melody: 'melody',
+  chords: 'chords',
+}
+
 function pickOp(
+  genome: MusicGenome,
   rng: Rng,
   intensity: MutationIntensity,
   config: MutationConfig,
 ): MutationOp {
-  const eligible = MUTATION_OPS.filter((op) => canApply(op, intensity))
+  const eligible = MUTATION_OPS.filter((op) => {
+    if (!canApply(op, intensity)) return false
+    const layer = CATEGORY_LAYER[op.category]
+    return layer === undefined || genome.activeLayers[layer]
+  })
   const weights = eligible.map((op) => Math.max(0.01, config.categoryWeights[op.category]))
   const total = weights.reduce((a, b) => a + b, 0)
   let r = rng.next() * total
@@ -557,7 +586,7 @@ export function mutate(
   }
 
   for (let attempt = 0; attempt < 12; attempt++) {
-    const op = pickOp(rng, intensity, config)
+    const op = pickOp(genome, rng, intensity, config)
     const result = op.apply(cloneGenome(genome), rng, intensity)
     if (result) {
       validateGenome(result.genome)

@@ -48,7 +48,14 @@ export function createMinimalSeed(): MusicGenome {
       hihat: pattern('x-x-x-x-x-x-x-x-', n),
     },
     bass: {
-      notes: notes('0 - - - 0 - - - 3 - - - 0 - - -', n),
+      // One bar per chord of the progression [0, 3, 4, 0]
+      notes: notes(
+        '0 - - - 0 - - - 4 - - - 0 - - - ' +
+          '3 - - - 3 - - - 5 - - - 3 - - - ' +
+          '4 - - - 4 - - - 1 - - - 4 - - - ' +
+          '0 - - - 0 - - - 4 - - - 0 - - -',
+        n,
+      ),
       octave: 2,
     },
     melody: {
@@ -82,11 +89,23 @@ export function createAmbientSeed(): MusicGenome {
       hihat: pattern('x---------------', n),
     },
     bass: {
-      notes: notes('0 - - - - - - - 4 - - - - - - -', n),
+      notes: notes(
+        '0 - - - - - - - 4 - - - - - - - ' +
+          '4 - - - - - - - 1 - - - - - - - ' +
+          '3 - - - - - - - 0 - - - - - - - ' +
+          '0 - - - - - - - 4 - - - - - - -',
+        n,
+      ),
       octave: 2,
     },
     melody: {
-      notes: notes('0 - - 2 - - 4 - - - 5 - - 4 - -', n),
+      notes: notes(
+        '0 - - 2 - - 4 - - - 5 - - 4 - - ' +
+          '4 - - 3 - - 1 - - - 2 - - 1 - - ' +
+          '3 - - 5 - - 7 - - - 5 - - 3 - - ' +
+          '2 - - 0 - - 4 - - - 2 - - 0 - -',
+        n,
+      ),
       octave: 5,
     },
     chords: {
@@ -116,11 +135,24 @@ export function createElectronicSeed(): MusicGenome {
       hihat: pattern('x-x-x-x-x-x-x-x-', n),
     },
     bass: {
-      notes: notes('0 - 0 - 0 - 0 3 0 - 0 - 5 - 3 -', n),
+      // Follows the progression [0, 5, 3, 4]: root pulse, fifth/third pickup
+      notes: notes(
+        '0 - 0 - 0 - 0 2 0 - 0 - 4 - 2 - ' +
+          '5 - 5 - 5 - 5 7 5 - 5 - 2 - 0 - ' +
+          '3 - 3 - 3 - 3 5 3 - 3 - 0 - 5 - ' +
+          '4 - 4 - 4 - 4 6 4 - 4 - 1 - 6 -',
+        n,
+      ),
       octave: 2,
     },
     melody: {
-      notes: notes('0 2 4 5 4 2 0 - 7 5 4 2 0 - - -', n),
+      notes: notes(
+        '0 2 4 5 4 2 0 - 7 5 4 2 0 - - - ' +
+          '5 4 2 4 5 4 2 - 7 5 4 2 2 - - - ' +
+          '3 2 3 5 7 5 3 - 5 4 3 2 3 - - - ' +
+          '4 5 6 5 4 2 1 - 1 2 4 5 6 - - -',
+        n,
+      ),
       octave: 4,
     },
     chords: {
@@ -150,11 +182,23 @@ export function createPentatonicSeed(): MusicGenome {
       hihat: pattern('--x---x---x---x-', n),
     },
     bass: {
-      notes: notes('0 - - 2 - - 0 - 4 - - 2 - - 0 -', n),
+      notes: notes(
+        '0 - - 2 - - 0 - 4 - - 2 - - 0 - ' +
+          '2 - - 4 - - 2 - 1 - - 4 - - 2 - ' +
+          '4 - - 1 - - 4 - 3 - - 1 - - 4 - ' +
+          '0 - - 2 - - 0 - 4 - - 2 - - 0 -',
+        n,
+      ),
       octave: 2,
     },
     melody: {
-      notes: notes('0 - 2 - 4 - 2 - 0 - 4 - 5 - 4 -', n),
+      notes: notes(
+        '0 - 2 - 4 - 2 - 0 - 4 - 5 - 4 - ' +
+          '2 - 1 - 4 - 2 - 1 - 2 - 4 - 6 - ' +
+          '4 - 3 - 1 - 3 - 3 - 4 - 6 - 4 - ' +
+          '0 - 2 - 4 - 2 - 5 - 4 - 2 - 0 -',
+        n,
+      ),
       octave: 4,
     },
     chords: {
