@@ -115,7 +115,8 @@ With evolution on, Play starts songs. Evolution off plays the current genome as 
 - **Song length** (short / medium / long) scales the template. It replaces the old "evolve every N bars" control.
 - **Composing** (`src/evolution/song.ts`): one generation per section boundary, with tempo and key frozen inside a song. Between songs one unrestricted step runs, so tempo or key can change at the handover.
 - **Energy**: each section renders the same genome at its energy: low energy drops melody, bass and drums; breakdowns drop kick and bass; builds sweep the filter open.
-- **Timeline** (`compileTimeline`): the current and next song are compiled into one `arrange()` on absolute cycles, so every section and song change happens on the audio clock, not on a JS timer. The next song is composed halfway through the current one; the last song is repeated in case the next one is late.
+- **Transitions**: every section change has a lead-in on the section's last bar: a tom fill, a snare roll when the next section is bigger, or a hi-hat riser out of a section with no drums. Builds add rising hi-hats and snare and drop the kick for their last bar; drops, peaks and choruses land on a crash (`cr` from dirt-samples). The song's last section ends without a fill.
+- **Timeline** (`compileTimeline`): the current and next song are compiled into one `arrange()` on absolute cycles, so every section and song change happens on the audio clock, not on a JS timer. Each section's loops are defined once as constants and shared by its segments (crash bar, body, fill bar), which keeps the code small. The next song is composed halfway through the current one; the last song is repeated in case the next one is late.
 - **Keep this song** bookmarks the first generation of the playing song.
 
 ## Forever playback

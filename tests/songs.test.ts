@@ -10,7 +10,9 @@ import {
   compileGenome,
   compileTimeline,
   renderForSection,
+  sectionTransition,
   songBars,
+  type SongSection,
   type ScheduledSong,
 } from '../src/strudel/compiler'
 
@@ -121,6 +123,41 @@ describe('Song rendering', () => {
     expect(r.sweep!.to).toBeGreaterThan(r.sweep!.from)
   })
 
+  it('leads into every section of a song and lands drops on a crash', () => {
+    const g = getSeed('electronic')
+    const sections: SongSection[] = planForm(getSongTemplate('groovy'), g.tempo, 'medium').map((s) => ({
+      ...s,
+      genome: g,
+    }))
+    const t = sections.map((_, i) => sectionTransition(sections, i))
+    const roles = sections.map((s) => s.role)
+    // intro, groove, build, drop, breakdown, build, drop, outro
+    expect(t.map((x) => x.fill)).toEqual(['roll', 'tom', 'build', 'tom', 'tom', 'build', 'tom', null])
+    expect(roles.filter((_, i) => t[i]!.crash)).toEqual(['drop', 'drop'])
+    expect(roles.filter((_, i) => t[i]!.ramp)).toEqual(['build', 'build'])
+  })
+
+  it('uses a hi-hat riser out of a section without drums', () => {
+    const g = getSeed('electronic')
+    const sections: SongSection[] = [
+      { role: 'intro', bars: 8, energy: 0.1, genome: g },
+      { role: 'groove', bars: 8, energy: 0.6, genome: g },
+    ]
+    expect(sectionTransition(sections, 0).fill).toBe('riser')
+    const code = compileTimeline([{ startCycle: 0, sections }], g.tempo)
+    expect(code).toContain('s("hh*16").gain(saw.range(0.05, 0.5))')
+  })
+
+  it('leaves out fills, ramps and crashes when drums are muted', () => {
+    const g = getSeed('electronic')
+    const sections: SongSection[] = [
+      { role: 'build', bars: 4, energy: 0.6, energyEnd: 0.9, genome: g },
+      { role: 'drop', bars: 8, energy: 1, genome: g },
+    ]
+    const code = compileTimeline([{ startCycle: 0, sections }], g.tempo, { drums: true })
+    expect(code).not.toMatch(/"(bd|sd|hh|cr|ht|mt|lt)[ *"]/)
+  })
+
   it('places songs on absolute cycles and repeats the last song as a safety net', () => {
     const g = getSeed('electronic')
     const a: ScheduledSong = {
@@ -132,9 +169,14 @@ describe('Song rendering', () => {
     }
     const code = compileTimeline([a], g.tempo)
     expect(code).toContain('[5, silence]')
-    expect(code.match(/\[24, arrange\(/g)).toHaveLength(2)
-    expect(code).toContain('[8, stack(')
-    expect(code).toContain('[16, stack(')
+    // Played once, then repeated as the safety net
+    expect(code.match(/\[24, song0\]/g)).toHaveLength(2)
+    expect(code).toContain('const song0 = arrange(')
+    // intro: 7 bars, then a snare roll into the drop; drop: a crash bar, then the rest
+    expect(code).toContain('[7, stack(song0s0d, song0s0t)]')
+    expect(code).toMatch(/\[1, stack\(song0s0t, /)
+    expect(code).toMatch(/\[1, stack\(song0s1d, song0s1t, s\("cr"\)/)
+    expect(code).toMatch(/\[15, stack\(song0s1d, song0s1t\)\.early\(1\)\]/)
   })
 
   it('speeds a song at another tempo up to the base tempo', () => {
@@ -147,9 +189,9 @@ describe('Song rendering', () => {
       sections: [{ role: 'drop', bars: 20, energy: 1, genome: faster }],
     }
     const code = compileTimeline([a, b], g.tempo)
-    expect(code).toContain('[16, arrange(')
+    expect(code).toContain('[16, song1]')
     // 20 bars at 1.25× the base tempo take 16 base cycles
-    expect(code).toMatch(/\[16, arrange\([\s\S]*\)\.fast\(1\.25\)\]/)
+    expect(code).toMatch(/const song1 = arrange\([\s\S]*\)\.fast\(1\.25\)\n/)
   })
 })
 
