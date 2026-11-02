@@ -5,6 +5,7 @@
  */
 import type { PatternGene, ScaleMode } from './genome'
 import type { ArpContour, ChordFamily, VoicingKind } from './theory'
+import type { PerformanceProfile } from './performance'
 
 export interface HarmonyLanguage {
   /** Chord type per diatonic family when the genome's voicing gene is "seventh" (the rich colour). */
@@ -83,6 +84,11 @@ export interface GenreStyle {
   arrange: ArrangeProfile
   /** Melody bars should share the motif's rhythm about this much (0–1), low to high. */
   motifIdentity: readonly [number, number]
+  /**
+   * How the genre's parts are played (velocity, micro-timing, phrase shape, dynamics between
+   * parts; see performance.ts). Missing = every hit as written, the old behaviour.
+   */
+  performance?: PerformanceProfile
 }
 
 const NO_ARRANGE: ArrangeProfile = {
@@ -177,6 +183,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [ply('perc', 2, { every: 4, chance: 0.25 })],
     },
     motifIdentity: [0.45, 0.95],
+    performance: { reference: 'soul', timing: 0.5, jitterMs: 1.5, velocity: 0.5, phrase: 1, ghosts: true, expression: 0.8 },
   },
   // Minimal / dub techno: one minor-seventh chord shape moved around, echoing stabs,
   // rimshots off the beat, a sub bass that stays out of the kick's way
@@ -216,6 +223,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [deg('chords', 0.15)],
     },
     motifIdentity: [0.5, 1],
+    performance: { reference: 'dance', timing: 0, jitterMs: 0, velocity: 0.3, phrase: 0.6, ghosts: false, hatPickup: true, expression: 0.5 },
   },
   // Electro: plain sevenths, an arp-driven lead, a broken 808 beat (not four-on-the-floor)
   electronic: {
@@ -254,6 +262,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [ply('hihat', 2, { every: 4, chance: 0.3 })],
     },
     motifIdentity: [0.4, 0.95],
+    performance: { reference: 'dance', timing: 0, jitterMs: 0, velocity: 0.35, phrase: 1, ghosts: false, hatPickup: true, expression: 0.7 },
   },
   // Ambient: wide-open ninths and elevenths moving slowly, everything soft
   ambient: {
@@ -292,6 +301,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [deg('arp', 0.2)],
     },
     motifIdentity: [0.2, 0.8],
+    performance: { reference: 'all', timing: 0.3, jitterMs: 2, velocity: 0.5, phrase: 0.5, ghosts: false, expression: 1 },
   },
   // Downtempo / trip hop: Rhodes-style rootless sevenths and ninths, a lazy swung beat
   downtempo: {
@@ -330,6 +340,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [deg('perc', 0.15)],
     },
     motifIdentity: [0.35, 0.9],
+    performance: { reference: 'hiphop', timing: 0.8, jitterMs: 3, velocity: 0.7, phrase: 1, ghosts: true, expression: 1 },
   },
   // Folk: open triads with the odd added ninth, a light acoustic groove
   folk: {
@@ -366,6 +377,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [],
     },
     motifIdentity: [0.45, 0.95],
+    performance: { reference: 'rock', timing: 1, jitterMs: 4, velocity: 0.8, phrase: 1, ghosts: false, expression: 1 },
   },
   // Lo-fi hip hop: jazzy ninths and thirteenths, a dragging snare, ghost notes,
   // hats that breathe, and the beat dropping out before a new section
@@ -406,6 +418,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [ply('hihat', 3, { every: 4, chance: 0.2 })],
     },
     motifIdentity: [0.35, 0.9],
+    performance: { reference: 'hiphop', timing: 1, jitterMs: 4, velocity: 0.8, phrase: 1, ghosts: true, expression: 1 },
   },
   // Liquid drum & bass: minor ninths on pads, a two-step with ghost snares rolling under it,
   // a sub that lands with the kick and moves in long notes
@@ -445,6 +458,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [ply('snare', 2, { every: 8, chance: 0.4 })],
     },
     motifIdentity: [0.3, 0.9],
+    performance: { reference: 'funk', timing: 0.6, jitterMs: 2, velocity: 0.6, phrase: 1, ghosts: true, expression: 0.7 },
   },
   // Trance: big open triads and suspensions, an off-beat rolling bass, a 16th arp,
   // off-beat open hats over 16th closed hats, long builds into the drop
@@ -484,6 +498,7 @@ export const STYLES: Record<string, GenreStyle> = {
       repeatGenes: [echo('chords', 6, 4)],
     },
     motifIdentity: [0.5, 0.95],
+    performance: { reference: 'dance', timing: 0, jitterMs: 0, velocity: 0.25, phrase: 1, ghosts: false, hatPickup: true, expression: 0.6 },
   },
 }
 
