@@ -137,7 +137,7 @@ export const KITS: Record<string, SoundKit> = {
     lead: { sound: 'triangle', gain: 0.45, lpf: 2400, attack: 0.03, release: 0.9, room: 0.7, delay: 0.4 },
     chords: { sound: 'supersaw', gain: 0.22, lpf: 1100, attack: 0.6, release: 1.6, room: 0.85 },
     arp: { sound: 'triangle', gain: 0.25, lpf: 2000, attack: 0.01, decay: 0.4, sustain: 0, delay: 0.5, room: 0.8 },
-    master: 1.56,
+    master: 2.3,
   },
   // Downtempo: laid-back kit, electric piano chords, a warm round bass
   downtempo: {
