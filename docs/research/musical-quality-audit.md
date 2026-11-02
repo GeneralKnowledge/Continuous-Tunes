@@ -52,7 +52,27 @@ Each item was checked by code (`npx tsx scripts/analysis/representation-gaps.ts`
 
 Symbolic and structural measurements on the played events, plus audio measurements on the recordings (`report.md` of the baseline collection):
 
-AUDIO_FINDINGS
+Audio (recordings through the real Strudel pipeline):
+
+| genre | heard BPM | LUFS | loudness range | mean step between sections | onsets/s | near-identical bar pairs |
+|---|---:|---:|---:|---:|---:|---:|
+| electronic | 128 | −15.2 | 12.1 LU | 6.6 LU | 7.7 | 31 % |
+| ambient | 70 | **−9.2** | 9.0 | 4.1 | 1.1 | 3 % |
+| minimal | 126 | −16.2 | 12.6 | 7.5 | 5.3 | **43 %** |
+| house | 122 | −15.7 | 13.2 | 7.3 | 5.5 | 29 % |
+| downtempo | 90 | −15.7 | 13.6 | 6.1 | 4.7 | 22 % |
+| folk | 100 | −16.4 | 9.6 | 5.5 | 5.4 | 32 % |
+| lo-fi | 82 | −14.8 | 7.5 | 3.9 | 2.8 | 16 % |
+| dnb | 172 | −17.9 | 13.6 | 7.6 | 4.2 | 26 % |
+| trance | 138 | −15.6 | 14.1 | 7.5 | 5.8 | 19 % |
+
+(Heard BPM is folded to the written octave. It is within 0.5 BPM of the written tempo in 23 of 27 songs; Essentia agrees in 26.)
+
+- **Ambient was 6–7 LU louder than every other channel and clipped**: 1.4 % of its samples were at or past full scale. Recordings from before PR #12 measure −16.2 LUFS, so the composition layer's held pads and counter-melody raised it without the kit trim following. *Fixed* (trim 2.3 → 1.1, now −15.2 LUFS).
+- **Every genre peaks at about +2 to +3.5 dBFS**: 21 of 27 songs have samples past full scale (0.003–0.26 % outside ambient). That's inaudible in a float pipeline, but it clips on fixed-point outputs. Not fixed: it needs a headroom decision across all kits.
+- **Audible looping**: in 28 sections (every electronic, house and trance drop, and minimal's long grooves) consecutive bars sound near-identical (feature similarity > 0.998). Up to 43 % of all non-adjacent bar pairs in minimal are near-identical.
+- **The dynamic shape is real**: sections differ by 4–7.6 LU on average, and in house the intro and breakdown sit 12–13 LU under the drops. Lo-fi has the flattest shape (3.9 LU), by design.
+- **The pulse is clear** in the beat-driven genres. The tempo estimate wanders between 12 s windows in trance, minimal and ambient (`tempo-unstable`). For ambient that reflects its weak pulse; for trance and minimal it's mostly the long breakdowns without kick.
 
 Symbolic:
 

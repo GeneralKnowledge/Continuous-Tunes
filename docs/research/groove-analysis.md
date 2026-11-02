@@ -80,6 +80,7 @@ The genome's representation is the root cause: drums are booleans on a fixed gri
 |---|---|---|
 | Per-position micro-timing via Strudel's `nudge` (seconds per hit) | reference style's mean offset per 16th × `timing` | lo-fi 1.0 and downtempo 0.8 (hip-hop reference), folk 1.0 (rock), dnb 0.6 (funk), house 0.5 (soul), ambient 0.3; electronic, minimal and trance 0 (programmed) |
 | Small hashed timing spread | far below the dataset's spread, on purpose (see finding 1) | 0–4 ms |
+| Limits | each systematic offset is held to ±0.12 of a 16th (rarely played positions have noisy means: hip-hop's kick on the second 16th averages a third of a 16th late), and each nudge to ±12 ms | all |
 | Hit-to-hit velocity spread | reference `velocityJitter` relative to its mean level × `velocity` | 0.25 (trance) to 0.8 (lo-fi, folk) |
 | Four-bar phrase level | measured `phraseVelocity` × 1.5 | all genres with drums |
 | Phrase-end pickup | a ghost snare (or, in programmed genres, a closed hat) on the last 16th of each 4-bar phrase, else before beat 3 or on the "e" of beat 4, where GMD's ghosts gather | ghosts: house, downtempo, lo-fi, dnb; hat pickup: electronic, minimal, trance |

@@ -54,7 +54,7 @@ describe('performance layer', () => {
 
   it('keeps micro-timing small and systematic (off-beat hats later than on-beat)', () => {
     const n = drumNudges({ ...LOFI, jitterMs: 0 }, 'hihat', Array(16).fill(true), 16, 90, 1)
-    expect(Math.max(...n.map(Math.abs))).toBeLessThan(0.026)
+    expect(Math.max(...n.map(Math.abs))).toBeLessThanOrEqual(0.012)
     expect(n[1]!).toBeGreaterThan(n[0]!)
   })
 

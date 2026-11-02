@@ -121,9 +121,13 @@ export function drumNudges(p: PerformanceProfile | undefined, voice: DrumVoice, 
     const s = i % spb
     const pos = Math.round((s * 16) / spb) % 16
     const bar = firstBar + Math.floor(i / spb)
-    const sys = inst ? (inst.offset[pos] ?? 0) * p.timing * sixteenth : 0
+    // Rarely played positions have noisy means in the dataset (hip-hop's kick on the second 16th
+    // averages a third of a 16th late), so the systematic part is held to ±0.12 of a 16th, about
+    // the largest well-sampled offset, and the total to ±12 ms
+    const off = Math.max(-0.12, Math.min(0.12, inst?.offset[pos] ?? 0))
+    const sys = off * p.timing * sixteenth
     const jit = (p.jitterMs / 1000) * bell(seed, bar + s / spb, SALT[voice] + 7)
-    return Math.max(-0.025, Math.min(0.025, sys + jit))
+    return Math.max(-0.012, Math.min(0.012, sys + jit))
   })
 }
 
