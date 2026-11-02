@@ -48,6 +48,9 @@ describe('Song fitness', () => {
 
   it('gives the same rhythm score on 8- and 16-step grids', () => {
     const g16 = cloneGenome(getSeed('electronic'))
+    // Only 8th-note hits survive on an 8-step grid; compare a groove that has no 16ths
+    const eighths = (a: boolean[]) => a.map((on, i) => on && i % 2 === 0)
+    g16.drums = { kick: eighths(g16.drums.kick), snare: eighths(g16.drums.snare), hihat: eighths(g16.drums.hihat) }
     const g8 = validateGenome(regridTo8(g16))
     expect(evaluateFitness(g8).metrics.rhythmicComplexity).toBeCloseTo(
       evaluateFitness(g16).metrics.rhythmicComplexity,
@@ -75,7 +78,13 @@ function regridTo8(g: ReturnType<typeof getSeed>) {
   const h = cloneGenome(g)
   const even = <T>(a: T[]) => a.filter((_, i) => i % 2 === 0)
   h.stepsPerBar = 8
-  h.drums = { kick: even(h.drums.kick), snare: even(h.drums.snare), hihat: even(h.drums.hihat) }
+  h.drums = {
+    kick: even(h.drums.kick),
+    snare: even(h.drums.snare),
+    hihat: even(h.drums.hihat),
+    ...(h.drums.perc ? { perc: even(h.drums.perc) } : {}),
+  }
+  if (h.arp) h.arp.pattern = even(h.arp.pattern)
   h.bass.notes = even(h.bass.notes)
   h.melody.notes = even(h.melody.notes)
   h.chords.rhythm = even(h.chords.rhythm)

@@ -23,20 +23,43 @@ export interface DrumPattern {
   kick: boolean[]
   snare: boolean[]
   hihat: boolean[]
+  /**
+   * Optional extra percussion (shaker, rim, conga or ride, by kit). Length = total steps.
+   * Missing in genomes saved before it existed.
+   */
+  perc?: boolean[]
 }
 
 export interface NoteLayer {
-  /** Scale degrees; null = rest. Length = stepsPerBar * bars. */
+  /**
+   * Scale degrees; null = rest. Length = stepsPerBar * bars.
+   * Degrees run from SCALE_DEGREE_MIN (below the root, for approach notes) to SCALE_DEGREE_MAX.
+   */
   notes: (number | null)[]
   octave: number
 }
 
 export interface ChordLayer {
-  /** Scale-degree roots for each chord slot (length = bars). */
+  /** Scale-degree roots for each chord slot (length = bars), 0–7. */
   progression: number[]
   voicing: ChordVoicing
+  /**
+   * Optional chord colour per bar: a chord type (Tonal names such as "m9", "7", "sus4", "maj7")
+   * replacing the genre's default colour for that bar; null keeps the default. Lets a bar become
+   * a secondary dominant, a borrowed chord or a suspension while its root stays a scale degree.
+   */
+  colors?: (string | null)[]
   /** Hit pattern length = stepsPerBar * bars. */
   rhythm: boolean[]
+}
+
+/**
+ * An arpeggio that follows the chords: each step is an index into the bar's chord tones
+ * (0 = lowest; indices past the last tone climb into the next octave), or null for a rest.
+ */
+export interface ArpLayer {
+  pattern: (number | null)[]
+  octave: number
 }
 
 export interface ActiveLayers {
@@ -44,6 +67,8 @@ export interface ActiveLayers {
   bass: boolean
   melody: boolean
   chords: boolean
+  /** Missing in genomes saved before the arp layer existed (= off). */
+  arp?: boolean
 }
 
 export interface GenomeParameters {
@@ -56,6 +81,11 @@ export interface GenomeParameters {
  * Not arbitrary JS — easy to mutate, compare, save, and compile.
  */
 export interface MusicGenome {
+  /**
+   * Genre whose musical language (chord colours, voicings, groove, fills) renders this genome.
+   * Optional: genomes saved before it existed play in the neutral default style.
+   */
+  genre?: string
   tempo: number
   stepsPerBar: number
   bars: number
@@ -64,6 +94,7 @@ export interface MusicGenome {
   bass: NoteLayer
   melody: NoteLayer
   chords: ChordLayer
+  arp?: ArpLayer
   activeLayers: ActiveLayers
   parameters: GenomeParameters
 }
@@ -74,8 +105,13 @@ export const STEPS_PER_BAR_OPTIONS = [8, 16] as const
 export const BARS_OPTIONS = [2, 4, 8] as const
 export const OCTAVE_MIN = 1
 export const OCTAVE_MAX = 6
-export const SCALE_DEGREE_MIN = 0
-export const SCALE_DEGREE_MAX = 7
+/** Note degrees: a little below the root (approach notes) to two octaves up. */
+export const SCALE_DEGREE_MIN = -7
+export const SCALE_DEGREE_MAX = 14
+/** Chord roots stay inside the first octave of the scale. */
+export const CHORD_ROOT_MIN = 0
+export const CHORD_ROOT_MAX = 7
+export const ARP_INDEX_MAX = 11
 
 /** Total step count for a genome. */
 export function totalSteps(g: Pick<MusicGenome, 'stepsPerBar' | 'bars'>): number {

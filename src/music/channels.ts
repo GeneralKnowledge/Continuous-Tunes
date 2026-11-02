@@ -12,6 +12,8 @@ export interface Channel {
   id: string
   label: string
   seedName: SeedName
+  /** Further seed compositions for the genre; a new lineage picks one by its RNG seed. */
+  seedVariants?: SeedName[]
   personalityId: string
   /** Sound kit id (see kits.ts); defaults to the channel id. */
   kitId?: string
@@ -28,6 +30,7 @@ export const CHANNELS: Channel[] = [
     id: 'electronic',
     label: 'Electronic',
     seedName: 'electronic',
+    seedVersion: 2,
     personalityId: 'driving',
     candidatesPerGeneration: 10,
   },
@@ -35,6 +38,8 @@ export const CHANNELS: Channel[] = [
     id: 'ambient',
     label: 'Ambient',
     seedName: 'ambient',
+    seedVersion: 2,
+    seedVariants: ['ambient-2'],
     personalityId: 'lush',
     candidatesPerGeneration: 8,
   },
@@ -42,7 +47,7 @@ export const CHANNELS: Channel[] = [
     id: 'minimal',
     label: 'Minimal',
     seedName: 'minimal-techno',
-    seedVersion: 2,
+    seedVersion: 3,
     personalityId: 'sparse',
     candidatesPerGeneration: 8,
   },
@@ -50,7 +55,8 @@ export const CHANNELS: Channel[] = [
     id: 'house',
     label: 'House',
     seedName: 'house',
-    seedVersion: 2,
+    seedVersion: 3,
+    seedVariants: ['house-2'],
     personalityId: 'groovy',
     candidatesPerGeneration: 12,
   },
@@ -58,7 +64,7 @@ export const CHANNELS: Channel[] = [
     id: 'downtempo',
     label: 'Downtempo',
     seedName: 'downtempo',
-    seedVersion: 2,
+    seedVersion: 3,
     personalityId: 'chill',
     candidatesPerGeneration: 8,
   },
@@ -66,6 +72,7 @@ export const CHANNELS: Channel[] = [
     id: 'folk',
     label: 'Folk',
     seedName: 'pentatonic',
+    seedVersion: 2,
     personalityId: 'folk',
     candidatesPerGeneration: 10,
   },
@@ -73,6 +80,8 @@ export const CHANNELS: Channel[] = [
     id: 'lofi',
     label: 'Lo-fi hip hop',
     seedName: 'lofi',
+    seedVersion: 2,
+    seedVariants: ['lofi-2'],
     personalityId: 'dusty',
     candidatesPerGeneration: 10,
   },
@@ -80,6 +89,8 @@ export const CHANNELS: Channel[] = [
     id: 'dnb',
     label: 'Drum & bass',
     seedName: 'dnb',
+    seedVersion: 2,
+    seedVariants: ['dnb-2'],
     personalityId: 'rolling',
     candidatesPerGeneration: 10,
   },
@@ -87,6 +98,8 @@ export const CHANNELS: Channel[] = [
     id: 'trance',
     label: 'Trance',
     seedName: 'trance',
+    seedVersion: 2,
+    seedVariants: ['trance-2'],
     personalityId: 'euphoric',
     candidatesPerGeneration: 10,
   },
@@ -98,8 +111,18 @@ export function getChannel(id: string): Channel {
   return c
 }
 
-export function channelSeed(channel: Channel): MusicGenome {
-  return getSeed(channel.seedName)
+/** All seed compositions of a channel, the main one first. */
+export function channelSeedNames(channel: Channel): SeedName[] {
+  return [channel.seedName, ...(channel.seedVariants ?? [])]
+}
+
+/**
+ * The channel's starting composition. A channel with several picks one by the lineage's RNG
+ * seed, so resetting with another seed can start from another idea; seed 0 (default) is the main one.
+ */
+export function channelSeed(channel: Channel, rngSeed = 0): MusicGenome {
+  const names = channelSeedNames(channel)
+  return getSeed(names[Math.abs(Math.trunc(rngSeed)) % names.length]!)
 }
 
 export function channelPersonality(channel: Channel): Personality {

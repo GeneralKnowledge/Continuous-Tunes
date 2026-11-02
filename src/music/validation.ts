@@ -1,5 +1,8 @@
 import {
+  ARP_INDEX_MAX,
   BARS_OPTIONS,
+  CHORD_ROOT_MAX,
+  CHORD_ROOT_MIN,
   CHORD_VOICINGS,
   OCTAVE_MAX,
   OCTAVE_MIN,
@@ -14,6 +17,7 @@ import {
   type ScaleMode,
   type ChordVoicing,
 } from './genome'
+import { isChordType } from './theory'
 
 export class GenomeValidationError extends Error {
   constructor(message: string) {
@@ -102,6 +106,7 @@ export function validateGenome(raw: unknown): MusicGenome {
   assertBoolArray('drums.kick', drums.kick, steps)
   assertBoolArray('drums.snare', drums.snare, steps)
   assertBoolArray('drums.hihat', drums.hihat, steps)
+  if (drums.perc !== undefined) assertBoolArray('drums.perc', drums.perc, steps)
 
   if (!isObject(bass)) throw new GenomeValidationError('bass must be an object')
   assertNoteArray('bass.notes', bass.notes, steps)
@@ -131,22 +136,58 @@ export function validateGenome(raw: unknown): MusicGenome {
   }
   for (let i = 0; i < chords.progression.length; i++) {
     const d = chords.progression[i]
-    if (typeof d !== 'number' || !Number.isInteger(d) || d < SCALE_DEGREE_MIN || d > SCALE_DEGREE_MAX) {
+    if (typeof d !== 'number' || !Number.isInteger(d) || d < CHORD_ROOT_MIN || d > CHORD_ROOT_MAX) {
       throw new GenomeValidationError(
-        `chords.progression[${i}] must be integer ${SCALE_DEGREE_MIN}–${SCALE_DEGREE_MAX}`,
+        `chords.progression[${i}] must be integer ${CHORD_ROOT_MIN}–${CHORD_ROOT_MAX}`,
       )
     }
+  }
+  if (chords.colors !== undefined) {
+    if (!Array.isArray(chords.colors) || chords.colors.length !== bars) {
+      throw new GenomeValidationError(`chords.colors must be (string|null)[] of length ${bars}`)
+    }
+    chords.colors.forEach((c: unknown, i: number) => {
+      if (c !== null && (typeof c !== 'string' || !isChordType(c))) {
+        throw new GenomeValidationError(`chords.colors[${i}] must be null or a known chord type`)
+      }
+    })
   }
   if (!isChordVoicing(chords.voicing)) {
     throw new GenomeValidationError(`chords.voicing must be one of ${CHORD_VOICINGS.join(',')}`)
   }
   assertBoolArray('chords.rhythm', chords.rhythm, steps)
 
+  if (raw.arp !== undefined) {
+    const arp = raw.arp
+    if (!isObject(arp)) throw new GenomeValidationError('arp must be an object')
+    if (!Array.isArray(arp.pattern) || arp.pattern.length !== steps) {
+      throw new GenomeValidationError(`arp.pattern must be (number|null)[] of length ${steps}`)
+    }
+    arp.pattern.forEach((v: unknown, i: number) => {
+      if (v !== null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > ARP_INDEX_MAX)) {
+        throw new GenomeValidationError(`arp.pattern[${i}] must be null or integer 0–${ARP_INDEX_MAX}`)
+      }
+    })
+    if (typeof arp.octave !== 'number' || !Number.isInteger(arp.octave) || arp.octave < OCTAVE_MIN || arp.octave > OCTAVE_MAX) {
+      throw new GenomeValidationError(`arp.octave must be ${OCTAVE_MIN}–${OCTAVE_MAX}`)
+    }
+  }
+
+  if (raw.genre !== undefined && typeof raw.genre !== 'string') {
+    throw new GenomeValidationError('genre must be a string')
+  }
+
   if (!isObject(activeLayers)) throw new GenomeValidationError('activeLayers must be an object')
   for (const key of ['drums', 'bass', 'melody', 'chords'] as const) {
     if (typeof activeLayers[key] !== 'boolean') {
       throw new GenomeValidationError(`activeLayers.${key} must be boolean`)
     }
+  }
+  if (activeLayers.arp !== undefined && typeof activeLayers.arp !== 'boolean') {
+    throw new GenomeValidationError('activeLayers.arp must be boolean')
+  }
+  if (activeLayers.arp && raw.arp === undefined) {
+    throw new GenomeValidationError('activeLayers.arp needs an arp layer')
   }
 
   if (!isObject(parameters)) throw new GenomeValidationError('parameters must be an object')

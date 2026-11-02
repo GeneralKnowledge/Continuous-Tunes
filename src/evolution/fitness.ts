@@ -1,4 +1,8 @@
 import type { MusicGenome } from '../music/genome'
+import { bassKickOverlap } from '../music/compose'
+import { barChordTones } from '../music/harmony'
+import { getStyle } from '../music/styles'
+import { diatonicChord, scaleLength } from '../music/theory'
 import {
   DEFAULT_STYLE,
   type FitnessSweetSpots,
@@ -97,32 +101,8 @@ function melodicIntervalVariety(arr: (number | null)[]): number {
   return Math.min(1, intervals.size / 5)
 }
 
-const SCALE_LENGTH: Record<MusicGenome['scale']['mode'], number> = {
-  major: 7,
-  minor: 7,
-  dorian: 7,
-  mixolydian: 7,
-  phrygian: 7,
-  pentatonic: 5,
-}
-
-const VOICING_OFFSETS: Record<MusicGenome['chords']['voicing'], number[]> = {
-  triad: [0, 2, 4],
-  seventh: [0, 2, 4, 6],
-  power: [0, 4],
-}
-
 function mod(n: number, m: number): number {
   return ((n % m) + m) % m
-}
-
-/** Scale degrees (mod scale length) that belong to the chord sounding in a bar. */
-function chordTonesForBar(genome: MusicGenome, bar: number): Set<number> {
-  const len = SCALE_LENGTH[genome.scale.mode]
-  const root = genome.chords.progression[bar] ?? 0
-  // Power chords still imply a third for melody purposes
-  const offsets = genome.chords.voicing === 'power' ? [0, 2, 4] : VOICING_OFFSETS[genome.chords.voicing]
-  return new Set(offsets.map((o) => mod(root + o, len)))
 }
 
 /**
@@ -130,7 +110,9 @@ function chordTonesForBar(genome: MusicGenome, bar: number): Set<number> {
  * Off-beat notes are free (passing tones). Returns null when the layer has no on-beat notes.
  */
 function chordToneRatio(genome: MusicGenome, notes: (number | null)[]): number | null {
-  const len = SCALE_LENGTH[genome.scale.mode]
+  const len = scaleLength(genome.scale.mode)
+  // The chords the genre actually plays, extensions included (a 9th is a chord tone over a m9)
+  const tones = barChordTones(genome)
   const spb = genome.stepsPerBar
   const beat = stepsPerBeat(spb)
   let total = 0
@@ -142,21 +124,28 @@ function chordToneRatio(genome: MusicGenome, notes: (number | null)[]): number |
     // Downbeats count double: that's where a clash is most audible
     const weight = i % spb === 0 ? 2 : 1
     total += weight
-    if (chordTonesForBar(genome, bar).has(mod(n, len))) fit += weight
+    if (tones[bar % genome.bars]!.has(mod(n, len))) fit += weight
   }
   return total === 0 ? null : fit / total
 }
 
-/** Chord progression uses common diatonic chords (I ii IV V vi) and isn't one chord throughout. */
+/**
+ * Chord progression uses the genre's harmonic vocabulary (I ii IV V vi without a genre) and
+ * isn't one chord throughout. Slow harmonic rhythm (two bars per chord) counts as changes.
+ */
 function progressionScore(genome: MusicGenome): number {
-  const len = SCALE_LENGTH[genome.scale.mode]
-  const common = new Set([0, 1, 3, 4, 5])
+  const len = scaleLength(genome.scale.mode)
+  const common = new Set(getStyle(genome.genre).harmony.vocabulary.map((d) => mod(d, len)))
   const prog = genome.chords.progression
   if (prog.length === 0) return 0
-  const ok = prog.filter((d) => common.has(mod(d, len))).length
+  // Diminished chords don't belong to these genres' vocabularies (a mode change can put one there)
+  const ok = prog.filter((d) => common.has(mod(d, len)) && !['dim', 'halfdim'].includes(diatonicChord(genome.scale, d).family)).length
   const unique = new Set(prog.map((d) => mod(d, len))).size
-  const uniqueness = Math.min(1, unique / Math.min(4, prog.length))
-  return 0.6 * (ok / prog.length) + 0.4 * uniqueness
+  const uniqueness = Math.min(1, unique / Math.min(4, Math.ceil(prog.length / (prog.length >= 8 ? 2 : 1))))
+  // Colours are seasoning: past half the bars the progression stops sounding like the genre
+  const colored = (genome.chords.colors ?? []).filter((c) => c !== null).length
+  const colorFit = colored * 2 <= prog.length ? 1 : 0.7
+  return (0.6 * (ok / prog.length) + 0.4 * uniqueness) * colorFit
 }
 
 /**
@@ -205,7 +194,7 @@ function rangeFit(value: number, [lo, hi]: readonly [number, number], width: num
 
 /** How well tempo, register and swing stay inside the personality's style. */
 function styleFit(genome: MusicGenome, style: StyleRanges): number {
-  const missingCore = style.coreLayers.filter((l) => !genome.activeLayers[l]).length
+  const missingCore = style.coreLayers.filter((l) => genome.activeLayers[l] !== true).length
   return (
     0.6 ** missingCore *
     rangeFit(genome.tempo, style.tempo, 8) *
@@ -319,6 +308,10 @@ export function evaluateFitness(
   const repetitionFit =
     repFits.length === 0 ? 0 : repFits.reduce((a, b) => a + b, 0) / repFits.length
 
+  // Bass and kick: genres that steer the bass around the kick (house, trance) lose a little when
+  // they collide; genres whose sub lands with the kick (dnb, lo-fi) lose a little when it never does
+  const interplay = genome.activeLayers.bass && genome.activeLayers.drums ? kickInterplay(genome) : 1
+
   // Prefer mostly stepwise melodies; big leaps everywhere sound random
   const smoothFit = genome.activeLayers.melody
     ? Math.min(1, melodicSmoothness(genome.melody.notes) / 0.6)
@@ -333,6 +326,8 @@ export function evaluateFitness(
     harmonic * 0.24 +
     smoothFit * 0.1
 
+  score *= 0.85 + 0.15 * interplay
+
   // Staying in the genre's tempo / register / swing range is a hard-ish requirement
   score *= 0.3 + 0.7 * styleFit(genome, personality?.style ?? DEFAULT_STYLE)
 
@@ -344,6 +339,15 @@ export function evaluateFitness(
   if (repetition < 0.15 && density > 0.3) score *= 0.7 // chaotic non-pattern
 
   return { score: clamp01(score), metrics }
+}
+
+function kickInterplay(genome: MusicGenome): number {
+  const overlap = bassKickOverlap(genome.bass.notes, genome.drums.kick)
+  if (overlap === null) return 1
+  const rule = getStyle(genome.genre).bassKick
+  if (rule === 'avoid') return 1 - overlap
+  if (rule === 'lock') return Math.min(1, overlap / 0.3)
+  return 1
 }
 
 function softFit(value: number, target: number, width: number): number {

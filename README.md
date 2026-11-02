@@ -33,14 +33,28 @@ Strudel Player  (@strudel/web: initStrudel / evaluate / hush)
 ```
 src/
   evolution/    engine, mutation, fitness, selection, generation, song, songs
-  music/        genome, seeds, channels, personality, form, validation
+  music/        genome, seeds, channels, personality, form, validation,
+                theory (Tonal + MusicTheoryJS), styles, harmony, compose, kits
   strudel/      compiler, player
   persistence/  session + channel lineage (localStorage; SQLite-ready interface)
   ui/           App
   lib/          deterministic RNG (Mulberry32)
 tests/
-scripts/evolve-cli.ts
+scripts/evolve-cli.ts, render-songs.ts, record-songs.mjs
 ```
+
+### Music theory layer
+
+`src/music/theory.ts` is the only module that imports the theory libraries; everything else asks it questions in scale degrees.
+
+- **[Tonal](https://github.com/tonaljs/tonal)** (MIT) is the foundation: mode intervals, diatonic seventh chords (`Mode.seventhChords`), chord types and their intervals, chord detection, and voicing search (`Voicing.search` with dictionaries built per genre).
+- **[MusicTheoryJS](https://github.com/Zachacious/MusicTheoryJS)** (ISC) is used selectively where it adds something: voice-leading cost and parallel-fifth/octave detection to choose between voicings, Euclidean rhythms for percussion, arpeggio orders, melodic inversion and diatonic sequences for motif development. Its progression, bassline and melody generators were tried and not adopted: they keep the root in the bass for pads, walk chromatically (the genome stores scale degrees) or don't know the genre.
+
+On top of it:
+
+- `styles.ts`: each genre's **harmony language** (seventh/ninth/eleventh vocabulary, colour chords, voicing kind and range, allowed modes), **groove** (per-step accent maps for kick, snare, hats and percussion, plus push/lay-back feel), bass/kick relationship (`avoid`, `lock`, `free`), fill kinds, arp contours and which sections hold pads.
+- `harmony.ts`: the chord of each bar, and voice-led voicings for the whole loop (chosen twice round the loop so the last bar leads smoothly into the first).
+- `compose.ts`: bass figures (root, octave, fifth, approach and passing notes, kick dodging), motif-based melodies with statement / sequence / answer / cadence phrases snapped to chord tones, arp patterns, and chord substitution for reharmonising.
 
 ## Genome
 
@@ -51,13 +65,17 @@ Structured, serialisable data — not arbitrary JS:
 | `tempo` | BPM 60–180 |
 | `stepsPerBar` / `bars` | Grid size (8/16 × 2/4/8) |
 | `scale` | `{ root: 0–11, mode }` |
-| `drums` | kick / snare / hihat boolean steps |
+| `genre` | optional style id (`house`, `dnb`, …); old genomes without it use the default style |
+| `drums` | kick / snare / hihat (+ optional `perc`) boolean steps |
 | `bass` / `melody` | scale-degree notes + null rests, octave |
-| `chords` | progression, voicing, rhythm |
-| `activeLayers` | which layers are on |
+| `chords` | progression, voicing, rhythm, optional per-bar `colors` (`m11`, `sus2`, `7`…) |
+| `arp` | optional arpeggio: chord-tone indices per step + octave |
+| `activeLayers` | which layers are on (`arp` optional) |
 | `parameters.swing` | 0–1 |
 
-**Seeds:** `minimal`, `ambient`, `electronic`, `pentatonic`.
+New fields are optional, so saved genomes from before still load and sound as they did.
+
+**Seeds:** `minimal`, `ambient`, `ambient-2`, `electronic`, `pentatonic`, `house`, `house-2`, `minimal-techno`, `downtempo`, `lofi`, `lofi-2`, `dnb`, `dnb-2`, `trance`, `trance-2`. Channels with several seeds pick one from the RNG seed.
 
 ## Evolution
 
@@ -76,7 +94,10 @@ Same RNG seed ⇒ same lineage (deterministic Mulberry32).
 `AddKickHit`, `RemoveKickHit`, `ToggleSnare`, `ToggleHihat`, `ShiftDrumPattern`,
 `ChangeBassRhythm`, `ChangeBassNote`, `ChangeMelodyNote`, `AddMelodyPhrase`,
 `ChangeChordRoot`, `ChangeChordVoicing`, `ChangeTempo`, `ChangeScaleRoot`,
-`ChangeScaleMode`, `AddLayer`, `RemoveLayer`, `ChangeSwing`, `RestructureLength`, …
+`ChangeScaleMode`, `AddLayer`, `RemoveLayer`, `ChangeSwing`, `RestructureLength`,
+`ColorChord`, `GhostSnare`, `VaryPercussion`, `ArpContour`, `ArpVariation`, …
+
+Mutations are harmony-aware: bass and melody changes pick chord tones of the bar, a new melody phrase develops the existing motif (repeat, sequence, inversion), a chord change swaps the whole held chord for a related one and moves the bass and melody with it, and mode changes stay inside the genre's modes.
 
 Probabilities live in **mutation config / personality weights**, not hardcoded at call sites.
 
@@ -88,6 +109,7 @@ Evaluates the genome directly (no audio analysis):
 - **Density per layer:** each layer has its own target, so a busy melody can't hide behind sparse drums
 - **Repetition per layer:** drums should loop, bass grooves repeat in rhythm, melodies vary most
 - rhythmic complexity (off-beat hits, same meaning on 8- and 16-step grids), melodic complexity, mostly-stepwise melodies, variety
+- **Groove interplay:** bass that dodges the kick (house, techno) or locks to it (lo-fi, downtempo), as the genre wants
 - **Genre style:** each personality has a tempo range, bass/melody octave ranges, a swing ceiling and core layers; leaving them is penalised so channels keep their identity
 
 Scores against personality **sweet spots**. Penalises empty silence, wall-of-sound chaos, and total stasis. Transparent and tunable — not “more complexity = better”.
@@ -99,14 +121,14 @@ UI “Channel” selector. Each channel = seed + personality (which also picks t
 | Channel | Seed | Personality | Sound kit |
 |---------|------|-------------|-----------|
 | Electronic | electronic | driving | 808 drums, resonant acid bass, plucked square lead |
-| House | house | groovy | club kick, claps, open hats, organ stabs, round bass |
+| House | house, house-2 | groovy | club kick, claps, open hats, organ stabs, round bass |
 | Minimal | minimal-techno | sparse | club kick, rimshots, sine sub, echoing dub chords |
-| Ambient | ambient | lush | soft kit, supersaw pads, glassy lead, big reverb |
+| Ambient | ambient, ambient-2 | lush | soft kit, supersaw pads, glassy lead, big reverb |
 | Downtempo | downtempo | chill | laid-back kit, FM electric piano, warm bass |
-| Folk | pentatonic | folk | acoustic-style kit, plucked lead, strummed chords |
-| Lo-fi hip hop | lofi | dusty | dusty 808s, bit-crushed electric piano, sine bass |
-| Drum & bass | dnb | rolling | stretched breakbeat under the drums, growling bass |
-| Trance | trance | euphoric | hard kick, rolling bass, supersaw lead and pads |
+| Folk | pentatonic | folk | acoustic-style kit, plucked lead, finger-picked arp |
+| Lo-fi hip hop | lofi, lofi-2 | dusty | dusty 808s, bit-crushed electric piano, sine bass |
+| Drum & bass | dnb, dnb-2 | rolling | stretched breakbeat under the drums, growling bass |
+| Trance | trance, trance-2 | euphoric | hard kick, rolling bass, supersaw lead and pads |
 
 Sound kits live in `src/music/kits.ts`: drum samples (dirt-samples `bank:index`; never a bare-number bank like `909`, which mini-notation reads as a number), synth voices (waveform, filter, envelope, FM, echo, bitcrush) and a `master` trim that keeps genres at about the same loudness. The compiler turns a kit into Strudel code; `DEFAULT_KIT` reproduces the original sounds.
 
@@ -193,9 +215,18 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and the production b
 
 ## Add a seed
 
-1. Write a factory in `src/music/seeds.ts` that returns a validated `MusicGenome`
-2. Register in `SEED_NAMES` / `getSeed` / `allSeeds`
+1. Write a factory in `src/music/seeds.ts` with the `seed({...})` builder (genre, progression, voicing, colours, drum templates, bass figures, a handwritten melody, arp)
+2. Register in `SEED_NAMES` / `getSeed` / `allSeeds`, and in the channel's `seed` or `seedVariants`; bump the channel's `seedVersion` if its sound changes
 3. Cover with validation tests
+
+## Listen to a genre offline
+
+```bash
+npx tsx scripts/render-songs.ts out.json 42 short            # one song per channel: theme, form, Strudel code
+node scripts/record-songs.mjs out.json recordings/ 280 2      # headless Chromium → mp3 (needs ffmpeg)
+```
+
+The recorder taps Strudel's output, so it must warm up every sample first; set `RECORD_ONLY=house,dnb` to record a few channels.
 
 ## Add a channel
 
