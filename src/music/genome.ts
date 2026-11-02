@@ -120,7 +120,25 @@ export function totalSteps(g: Pick<MusicGenome, 'stepsPerBar' | 'bars'>): number
 
 /** Deep clone via JSON (genome is plain data). */
 export function cloneGenome(g: MusicGenome): MusicGenome {
-  return JSON.parse(JSON.stringify(g)) as MusicGenome
+  return deepCopy(g)
+}
+
+/** Deep copy of plain JSON data (arrays, objects, primitives); several times faster than a JSON round trip. */
+function deepCopy<T>(v: T): T {
+  if (Array.isArray(v)) {
+    const out = new Array(v.length)
+    for (let i = 0; i < v.length; i++) out[i] = deepCopy(v[i])
+    return out as T
+  }
+  if (v !== null && typeof v === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const k in v) {
+      const x = (v as Record<string, unknown>)[k]
+      if (x !== undefined) out[k] = deepCopy(x)
+    }
+    return out as T
+  }
+  return v
 }
 
 export function serializeGenome(g: MusicGenome): string {

@@ -121,10 +121,17 @@ export function isChordType(type: string): boolean {
 }
 
 /** Semitones of a chord type above its root, from Tonal. */
+const typeIntervalCache = new Map<string, number[]>()
+
 export function chordTypeIntervals(type: string): number[] {
-  const t = ChordType.get(type)
-  if (t.empty) throw new Error(`Unknown chord type: ${type}`)
-  return t.intervals.map((i) => Interval.semitones(i) ?? 0)
+  let out = typeIntervalCache.get(type)
+  if (!out) {
+    const t = ChordType.get(type)
+    if (t.empty) throw new Error(`Unknown chord type: ${type}`)
+    out = t.intervals.map((i) => Interval.semitones(i) ?? 0)
+    typeIntervalCache.set(type, out)
+  }
+  return out
 }
 
 /** The diatonic seventh chord on a degree, as a Tonal symbol ("Fm7", "AbMaj7"). */
@@ -136,9 +143,16 @@ function diatonicSeventh(scale: Scale, degree: number): string {
 }
 
 /** The diatonic chord on a scale degree: its root and family (from Tonal's mode harmonisation). */
+const familyCache = new Map<string, ChordFamily>()
+
 export function diatonicChord(scale: Scale, degree: number): { root: number; family: ChordFamily } {
-  const c = Chord.get(diatonicSeventh(scale, degree))
-  return { root: degreePc(scale, degree), family: FAMILY_OF_TYPE[c.type] ?? 'major' }
+  const key = `${scale.root} ${scale.mode} ${degree}`
+  let family = familyCache.get(key)
+  if (!family) {
+    family = FAMILY_OF_TYPE[Chord.get(diatonicSeventh(scale, degree)).type] ?? 'major'
+    familyCache.set(key, family)
+  }
+  return { root: degreePc(scale, degree), family }
 }
 
 /** Plain triad type for a family. */
