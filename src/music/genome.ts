@@ -37,6 +37,11 @@ export interface NoteLayer {
    */
   notes: (number | null)[]
   octave: number
+  /**
+   * How long each note sounds, as a share of the gap to the next onset: 0 = one step (the old
+   * behaviour), 1 = legato into the next note. Missing in genomes saved before it existed.
+   */
+  gate?: number
 }
 
 export interface ChordLayer {
@@ -51,6 +56,8 @@ export interface ChordLayer {
   colors?: (string | null)[]
   /** Hit pattern length = stepsPerBar * bars. */
   rhythm: boolean[]
+  /** Stab length as a share of the gap to the next hit (see NoteLayer.gate). */
+  gate?: number
 }
 
 /**
@@ -69,6 +76,36 @@ export interface ActiveLayers {
   chords: boolean
   /** Missing in genomes saved before the arp layer existed (= off). */
   arp?: boolean
+  /** Counter-melody; missing = off. */
+  counter?: boolean
+}
+
+/** Layers a pattern gene can transform. */
+export const PATTERN_TARGETS = ['kick', 'snare', 'hihat', 'perc', 'bass', 'melody', 'chords', 'arp', 'counter'] as const
+export type PatternTarget = (typeof PATTERN_TARGETS)[number]
+
+/**
+ * Pattern transforms, after TidalCycles:
+ * - degrade: drop each event with probability `amount` (Tidal's degradeBy): breathing hats, sparse twinkles
+ * - ply: repeat each event `amount` (2–4) times inside its own length: rolls, ratchets, triplet hat flourishes
+ * - off: an echo `amount` steps later at a lower level (Tidal's off): dub answers, delayed responses
+ * - nudge: play `amount` of a step late (negative: early): the layer's feel against the grid
+ */
+export const PATTERN_OPS = ['degrade', 'ply', 'off', 'nudge'] as const
+export type PatternOp = (typeof PATTERN_OPS)[number]
+
+/**
+ * A transform on one layer, played by Strudel on every pass (so a 4-bar loop played for 16 bars
+ * varies from pass to pass) and understood by the fitness and the mutations.
+ */
+export interface PatternGene {
+  target: PatternTarget
+  op: PatternOp
+  amount: number
+  /** Only on the last bar of every `every` bars, counted from the section start (Tidal's lastOf). */
+  every?: number
+  /** Each event is transformed with this probability (Tidal's sometimesBy); always when missing. */
+  chance?: number
 }
 
 export interface GenomeParameters {
@@ -95,6 +132,13 @@ export interface MusicGenome {
   melody: NoteLayer
   chords: ChordLayer
   arp?: ArpLayer
+  /**
+   * A secondary line that answers the melody (composed from it and the chords, see counter.ts).
+   * Missing in genomes saved before it existed.
+   */
+  counter?: NoteLayer
+  /** Pattern transforms (see PatternGene); missing = none. */
+  patterns?: PatternGene[]
   activeLayers: ActiveLayers
   parameters: GenomeParameters
 }

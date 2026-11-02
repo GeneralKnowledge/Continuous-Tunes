@@ -48,6 +48,8 @@ export interface SoundKit {
   chords: SynthVoice
   /** Voice for the arpeggio layer; a softer lead when missing. */
   arp?: SynthVoice
+  /** Voice for the counter-melody; a quieter, darker lead when missing. */
+  counter?: SynthVoice
   /** Loudness trim so every genre plays at about the same level. */
   master: number
 }

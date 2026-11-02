@@ -13,8 +13,11 @@ import {
 } from '../music/genome'
 import type { MutationWeights, Personality } from '../music/personality'
 import { validateGenome } from '../music/validation'
-import { arpPattern, clampDegree, onBeat, rebaseLine, snapToChords, substituteChord } from '../music/compose'
-import { chordTonesNear } from '../music/harmony'
+import { arpPattern, clampDegree, composeBass, onBeat, rebaseLine, snapToChords, substituteChord } from '../music/compose'
+import { refreshCounter } from '../music/counter'
+import { MarkovChain, lsystemWalk } from '../music/generative'
+import { barChordTones, chordTonesNear } from '../music/harmony'
+import { MOTIF_TRANSFORMS, cellFrom, contract, extend, fragment, placeCell, transformCell } from '../music/motif'
 import { getStyle } from '../music/styles'
 import { colorFits, diatonicChord, euclid, invertDegrees, scaleLength, sequenceDegrees } from '../music/theory'
 
@@ -33,6 +36,8 @@ export interface MutationOp {
   minIntensity: MutationIntensity
   /** Layer the op edits, when it isn't the category's own (arp ops). */
   layer?: keyof MusicGenome['activeLayers']
+  /** Relative chance against the other ops of its category (1 when missing). */
+  weight?: number
   apply: (genome: MusicGenome, rng: Rng, intensity: MutationIntensity) => MutationResult | null
 }
 
@@ -198,6 +203,7 @@ export const MUTATION_OPS: MutationOp[] = [
     name: 'ToggleHihat',
     category: 'rhythm',
     minIntensity: 'small',
+    weight: 0.6,
     apply(genome, rng) {
       const g = cloneGenome(genome)
       const i = rng.int(0, g.drums.hihat.length - 1)
@@ -289,6 +295,7 @@ export const MUTATION_OPS: MutationOp[] = [
     name: 'ChangeMelodyNote',
     category: 'melody',
     minIntensity: 'small',
+    weight: 0.7,
     apply(genome, rng) {
       const g = cloneGenome(genome)
       const spb = g.stepsPerBar
@@ -679,6 +686,7 @@ export const MUTATION_OPS: MutationOp[] = [
       g.chords.rhythm = rg(g.chords.rhythm, false)
       if (g.drums.perc) g.drums.perc = rg(g.drums.perc, false)
       if (g.arp) g.arp.pattern = rg(g.arp.pattern, null)
+      if (g.counter) g.counter.notes = rg(g.counter.notes, null)
       if (g.chords.colors) g.chords.colors = Array.from({ length: newBars }, (_, i) => g.chords.colors![i % g.bars] ?? null)
       g.chords.progression = Array.from(
         { length: newBars },
@@ -694,6 +702,220 @@ export const MUTATION_OPS: MutationOp[] = [
     },
   },
 ]
+
+// ─── Structural mutations: motifs, phrases, genes ───────────────────
+
+/** Bars of a line that have notes. */
+function filledBars(line: readonly (number | null)[], spb: number, bars: number): number[] {
+  return Array.from({ length: bars }, (_, b) => b).filter((b) => line.slice(b * spb, (b + 1) * spb).some((d) => d !== null))
+}
+
+function placeOptions(g: MusicGenome) {
+  const tones = barChordTones(g)
+  return {
+    chordTonesAt: (s: number) => tones[Math.floor(s / g.stepsPerBar) % g.bars]!,
+    scaleLength: scaleLength(g.scale.mode),
+  }
+}
+
+const STRUCTURAL_OPS: MutationOp[] = [
+  {
+    name: 'DevelopMotif',
+    category: 'melody',
+    minIntensity: 'moderate',
+    weight: 1.6,
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const spb = g.stepsPerBar
+      // A bar becomes a development of another bar's phrase: inverted, reversed, fragmented,
+      // displaced, extended, answered… placed on its own bar's harmony
+      const filled = filledBars(g.melody.notes, spb, g.bars)
+      if (filled.length === 0 || g.bars < 2) return null
+      const from = rng.pick(filled)
+      const to = (from + rng.int(1, g.bars - 1)) % g.bars
+      const src = cellFrom(g.melody.notes, from * spb, spb)!
+      const kind = rng.pick(MOTIF_TRANSFORMS)
+      const dev = transformCell(src, kind, rng)
+      if (dev.notes.length === 0) return null
+      const before = g.melody.notes.slice(0, to * spb).filter((d): d is number => d !== null).pop()
+      const anchor = before ?? g.melody.notes.slice(from * spb, (from + 1) * spb).find((d) => d !== null)!
+      for (let s = to * spb; s < (to + 1) * spb; s++) g.melody.notes[s] = null
+      placeCell(g.melody.notes, { ...dev, span: spb }, to * spb, anchor + rng.pick([0, 0, 1, -1, 2]), spb, placeOptions(g))
+      return { genome: g, mutationName: 'DevelopMotif', description: `bar ${from}→${to} ${kind}` }
+    },
+  },
+  {
+    name: 'RegenerateMelodyBar',
+    category: 'melody',
+    minIntensity: 'moderate',
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const spb = g.stepsPerBar
+      const len = scaleLength(g.scale.mode)
+      // A new bar in the melody's own idiom: its intervals as a second-order Markov chain, its
+      // rhythm taken from another bar, strong beats on the chord, the range of the line kept
+      const line = g.melody.notes.filter((d): d is number => d !== null)
+      const filled = filledBars(g.melody.notes, spb, g.bars)
+      if (line.length < 4 || filled.length < 2) return null
+      const intervals = line.slice(1).map((d, i) => d - line[i]!)
+      const chain = new MarkovChain<number>(2, String).learn(intervals, true)
+      const to = rng.pick(filled)
+      const rhythmFrom = rng.pick(filled.filter((b) => b !== to))
+      const onsets = Array.from({ length: spb }, (_, s) => s).filter((s) => g.melody.notes[rhythmFrom * spb + s] !== null)
+      const lo = Math.min(...line)
+      const hi = Math.max(...line)
+      const tones = barChordTones(g)[to]!
+      let cur = g.melody.notes.slice(0, to * spb).filter((d): d is number => d !== null).pop() ?? line[0]!
+      const ctx: number[] = []
+      for (let s = to * spb; s < (to + 1) * spb; s++) g.melody.notes[s] = null
+      for (const s of onsets) {
+        const strong = onBeat(s, spb)
+        const iv = chain.next(
+          ctx,
+          rng,
+          (x) => cur + x >= lo && cur + x <= hi && (!strong || tones.has(((cur + x) % len + len) % len)),
+        ) ?? chordTonesNear(g, to, cur, 3)[0]! - cur
+        cur = clampDegree(cur + iv)
+        ctx.push(iv)
+        g.melody.notes[to * spb + s] = cur
+      }
+      return { genome: g, mutationName: 'RegenerateMelodyBar', description: `markov bar ${to}` }
+    },
+  },
+  {
+    name: 'PhraseDensity',
+    category: 'melody',
+    minIntensity: 'small',
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const spb = g.stepsPerBar
+      // Thin a phrase to its head, drop its last note, or extend it by a step into its gap
+      const filled = filledBars(g.melody.notes, spb, g.bars)
+      if (filled.length === 0) return null
+      const bar = rng.pick(filled)
+      const src = cellFrom(g.melody.notes, bar * spb, spb)!
+      const kind = src.notes.length <= 2 ? 'extend' : rng.pick(['extend', 'contract', 'fragment'] as const)
+      const dev = kind === 'extend' ? extend(src) : kind === 'contract' ? contract(src) : fragment(src, Math.ceil(src.notes.length / 2) + 1)
+      if (dev.notes.length === src.notes.length && kind !== 'extend') return null
+      const anchor = g.melody.notes.slice(bar * spb, (bar + 1) * spb).find((d) => d !== null)!
+      for (let s = bar * spb; s < (bar + 1) * spb; s++) g.melody.notes[s] = null
+      for (const n of dev.notes) g.melody.notes[bar * spb + n.at] = clampDegree(anchor + n.deg)
+      g.melody.notes = snapToChords(g, g.melody.notes)
+      return { genome: g, mutationName: 'PhraseDensity', description: `${kind} bar ${bar}` }
+    },
+  },
+  {
+    name: 'VaryBassPhrase',
+    category: 'bass',
+    minIntensity: 'small',
+    weight: 1.5,
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const spb = g.stepsPerBar
+      // One bar of the bassline re-played from the genre's vocabulary of figures, following the
+      // chords and the genre's kick rule: a variation a bass player would play, not a random note
+      const figures = getStyle(g.genre).bassFigures
+      if (figures.length === 0) return null
+      const bar = rng.int(0, g.bars - 1)
+      const fig = rng.pick(figures)
+      const line = composeBass(g, Array.from({ length: g.bars }, () => fig))
+      const slice = line.slice(bar * spb, (bar + 1) * spb)
+      if (slice.every((d, s) => d === g.bass.notes[bar * spb + s])) return null
+      for (let s = 0; s < spb; s++) g.bass.notes[bar * spb + s] = slice[s]!
+      return { genome: g, mutationName: 'VaryBassPhrase', description: `bass bar ${bar} ${fig}` }
+    },
+  },
+  {
+    name: 'ChangeGate',
+    category: 'parameters',
+    minIntensity: 'small',
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      // Note lengths within the genre's idiom: a punchier bass, a more legato line
+      const gates = getStyle(g.genre).gates
+      const which = rng.pick(['bass', 'melody', ...(gates.chords ? (['chords'] as const) : [])] as const)
+      const range = which === 'chords' ? gates.chords! : gates[which]
+      const cur = (which === 'chords' ? g.chords.gate : g[which].gate) ?? (range[0] + range[1]) / 2
+      const next = Number(clamp(cur + rng.pick([-0.1, 0.1, -0.2, 0.2]), range[0], range[1]).toFixed(2))
+      if (next === cur) return null
+      if (which === 'chords') g.chords.gate = next
+      else g[which].gate = next
+      return { genome: g, mutationName: 'ChangeGate', description: `${which} gate ${next}` }
+    },
+  },
+  {
+    name: 'AddPatternGene',
+    category: 'rhythm',
+    minIntensity: 'small',
+    weight: 0.7,
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      // One of the genre's own transforms (a hat roll into the turnaround, a dub echo…)
+      const have = g.patterns ?? []
+      const options = getStyle(g.genre).genes.filter((x) => !have.some((y) => y.target === x.target && y.op === x.op))
+      if (options.length === 0 || have.length >= 6) return null
+      const gene = { ...rng.pick(options) }
+      g.patterns = [...have, gene]
+      return { genome: g, mutationName: 'AddPatternGene', description: `${gene.op} ${gene.target}` }
+    },
+  },
+  {
+    name: 'TweakPatternGene',
+    category: 'rhythm',
+    minIntensity: 'small',
+    weight: 0.7,
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const genes = g.patterns ?? []
+      if (genes.length === 0) return null
+      const i = rng.int(0, genes.length - 1)
+      const gene = { ...genes[i]! }
+      // A gene's probability, its cycle, or its size moves a little
+      if (gene.op === 'degrade') gene.amount = Number(clamp(gene.amount + rng.pick([-0.05, 0.05, 0.1]), 0.02, 0.6).toFixed(2))
+      else if (gene.op === 'ply' && rng.chance(0.5)) gene.chance = Number(clamp((gene.chance ?? 1) + rng.pick([-0.1, 0.1]), 0.05, 1).toFixed(2))
+      else if (gene.op === 'off') gene.amount = rng.pick([2, 3, 4, 6].filter((x) => x !== gene.amount))
+      else if (gene.op === 'nudge') gene.amount = Number(clamp(gene.amount + rng.pick([-0.05, 0.05]), -0.3, 0.3).toFixed(2))
+      else gene.every = rng.pick([2, 4, 8].filter((x) => x !== gene.every))
+      genes[i] = gene
+      g.patterns = genes
+      return { genome: g, mutationName: 'TweakPatternGene', description: `${gene.op} ${gene.target}` }
+    },
+  },
+  {
+    name: 'RemovePatternGene',
+    category: 'rhythm',
+    minIntensity: 'moderate',
+    weight: 0.5,
+    apply(genome, rng) {
+      const g = cloneGenome(genome)
+      const genes = g.patterns ?? []
+      if (genes.length === 0) return null
+      const i = rng.int(0, genes.length - 1)
+      const [gone] = genes.splice(i, 1)
+      g.patterns = genes
+      return { genome: g, mutationName: 'RemovePatternGene', description: `${gone!.op} ${gone!.target} off` }
+    },
+  },
+  {
+    name: 'ArpLSystem',
+    category: 'chords',
+    layer: 'arp',
+    minIntensity: 'moderate',
+    weight: 0.6,
+    apply(genome, rng) {
+      if (!genome.arp) return null
+      const g = cloneGenome(genome)
+      // Same rhythm, a self-similar contour (isobar's L-system walk) that grows across the loop
+      const rule = rng.pick(['N+N-N', 'N+N+N-N', 'N-N+N+N', 'N+N[+N]-N', 'NN+N-'])
+      const contour = lsystemWalk(rule, 3, rng.int(0, 2))
+      let k = 0
+      g.arp!.pattern = g.arp!.pattern.map((v) => (v === null ? null : ((contour[k++ % contour.length]! % 8) + 8) % 8))
+      return { genome: g, mutationName: 'ArpLSystem', description: `arp ${rule}` }
+    },
+  },
+]
+
+MUTATION_OPS.push(...STRUCTURAL_OPS)
 
 /** Categories that only edit one layer; mutating a silent layer changes nothing audible. */
 const CATEGORY_LAYER: Partial<Record<keyof MutationWeights, keyof MusicGenome['activeLayers']>> = {
@@ -715,7 +937,7 @@ function pickOp(
     return layer === undefined || genome.activeLayers[layer] === true
   })
   // A zero weight switches a category off (e.g. tempo and key inside a song)
-  let weights = eligible.map((op) => Math.max(0, config.categoryWeights[op.category]))
+  let weights = eligible.map((op) => Math.max(0, config.categoryWeights[op.category]) * (op.weight ?? 1))
   if (weights.every((w) => w === 0)) weights = eligible.map(() => 1)
   const total = weights.reduce((a, b) => a + b, 0)
   let r = rng.next() * total
@@ -725,6 +947,13 @@ function pickOp(
     if (r <= 0) return eligible[i]!
   }
   return eligible[weights.findLastIndex((w) => w > 0)]!
+}
+
+/** A counter-melody is derived from the melody and the chords, so it follows any change to them. */
+function finish(result: MutationResult): MutationResult {
+  refreshCounter(result.genome)
+  validateGenome(result.genome)
+  return result
 }
 
 /**
@@ -751,18 +980,14 @@ export function mutate(
     if (!result) {
       // Fall through to random if forced op can't apply
     } else {
-      validateGenome(result.genome)
-      return result
+      return finish(result)
     }
   }
 
   for (let attempt = 0; attempt < 12; attempt++) {
     const op = pickOp(genome, rng, intensity, config)
     const result = op.apply(cloneGenome(genome), rng, intensity)
-    if (result) {
-      validateGenome(result.genome)
-      return result
-    }
+    if (result) return finish(result)
   }
 
   // Guaranteed no-op-safe fallback: nudge tempo by ±1, or swing when tempo is frozen (inside a song)

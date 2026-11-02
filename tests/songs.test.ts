@@ -94,7 +94,7 @@ describe('Song rendering', () => {
     const g = getSeed('electronic')
     const code = compileGenome(g)
     expect(code).toContain(`.slow(${g.bars})`)
-    expect(code).toMatch(/^setcps\(0\.51667\)/) // 124 BPM / 4 beats per bar / 60
+    expect(code).toMatch(/^setcps\(0\.53333\)/) // 128 BPM / 4 beats per bar / 60
   })
 
   it('swings by delaying off-beat steps by a fraction of one step', () => {
