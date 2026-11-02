@@ -29,7 +29,7 @@ export interface StyleRanges {
   melodyOctave: readonly [number, number]
   maxSwing: number
   /** Layers the genre needs; dropping one is penalised. */
-  coreLayers: readonly ('drums' | 'bass' | 'melody' | 'chords')[]
+  coreLayers: readonly ('drums' | 'bass' | 'melody' | 'chords' | 'arp')[]
 }
 
 export const DEFAULT_STYLE: StyleRanges = {
@@ -90,7 +90,7 @@ export const PERSONALITIES: Record<string, Personality> = {
       melodicComplexity: 0.1,
       variety: 0.3,
     },
-    style: { tempo: [84, 132], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.2, coreLayers: ['drums', 'bass'] },
+    style: { tempo: [84, 132], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.2, coreLayers: ['drums', 'bass', 'chords'] },
     intensityBias: { small: 0.8, moderate: 0.15, experimental: 0.05 },
   },
   lush: {
@@ -182,7 +182,7 @@ export const PERSONALITIES: Record<string, Personality> = {
       melodicComplexity: 0.75,
       variety: 0.55,
     },
-    style: { tempo: [70, 100], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.35, coreLayers: ['bass', 'melody', 'chords'] },
+    style: { tempo: [70, 100], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.35, coreLayers: ['drums', 'bass', 'melody', 'chords'] },
     intensityBias: { small: 0.75, moderate: 0.2, experimental: 0.05 },
   },
   folk: {
@@ -205,7 +205,8 @@ export const PERSONALITIES: Record<string, Personality> = {
       melodicComplexity: 0.85,
       variety: 0.62,
     },
-    style: { tempo: [84, 120], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.25, coreLayers: ['bass', 'melody', 'chords'] },
+    // Folk's harmony is finger-picked on the arp layer
+    style: { tempo: [84, 120], bassOctave: [2, 3], melodyOctave: [4, 5], maxSwing: 0.25, coreLayers: ['bass', 'melody', 'arp'] },
     intensityBias: DEFAULT_INTENSITY,
   },
   dusty: {
@@ -251,7 +252,7 @@ export const PERSONALITIES: Record<string, Personality> = {
       melodicComplexity: 0.4,
       variety: 0.5,
     },
-    style: { tempo: [164, 178], bassOctave: [1, 2], melodyOctave: [4, 5], maxSwing: 0.1, coreLayers: ['drums', 'bass'] },
+    style: { tempo: [164, 178], bassOctave: [1, 2], melodyOctave: [4, 5], maxSwing: 0.1, coreLayers: ['drums', 'bass', 'chords'] },
     intensityBias: { small: 0.65, moderate: 0.25, experimental: 0.1 },
   },
   euphoric: {

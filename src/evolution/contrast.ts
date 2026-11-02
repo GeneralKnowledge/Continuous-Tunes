@@ -4,7 +4,10 @@
  */
 import { evaluateFitness } from './fitness'
 import { DEFAULT_MUTATION_CONFIG, mutate, mutateN, type MutationConfig } from './mutation'
-import { cloneGenome, SCALE_DEGREE_MAX, SCALE_DEGREE_MIN, type MusicGenome } from '../music/genome'
+import { CHORD_ROOT_MAX, CHORD_ROOT_MIN, cloneGenome, type MusicGenome } from '../music/genome'
+import { composeMelody, extractMotif, rebaseLine, type PhraseBar } from '../music/compose'
+import { getStyle } from '../music/styles'
+import { scaleLength } from '../music/theory'
 import type { Personality } from '../music/personality'
 import { validateGenome } from '../music/validation'
 import { createRng, type Rng } from '../lib/rng'
@@ -57,70 +60,82 @@ function sweet(x: number, lo: number, hi: number, width = 0.35): number {
   return Math.max(0, 1 - d / width)
 }
 
-function clampDegree(d: number): number {
-  return Math.max(SCALE_DEGREE_MIN, Math.min(SCALE_DEGREE_MAX, d))
+function clampRoot(d: number): number {
+  return Math.max(CHORD_ROOT_MIN, Math.min(CHORD_ROOT_MAX, d))
 }
 
 /**
- * New chords: the progression rotated by half its length, with a substitution or two
- * (a third or a fourth up), so B starts somewhere else harmonically but stays in key.
+ * New chords: the progression rotated by half its length (by whole chord changes, so two-bar
+ * chords stay two bars), with a substitution or two from the genre's vocabulary (a chord a
+ * third away shares two tones), so B starts somewhere else harmonically but stays in key and
+ * in the genre's language.
  */
-function reharmonise(progression: readonly number[], rng: Rng): number[] {
+function reharmonise(theme: MusicGenome, rng: Rng): number[] {
+  const progression = theme.chords.progression
   const n = progression.length
+  const len = scaleLength(theme.scale.mode)
+  const vocab = getStyle(theme.genre).harmony.vocabulary.filter((d) => d < len)
   const shift = n > 1 ? Math.floor(n / 2) : 0
   const out = progression.map((_, i) => progression[(i + shift) % n]!)
-  for (let i = 0; i < n; i++) {
-    if (rng.chance(0.3)) out[i] = (out[i]! + (rng.chance(0.5) ? 2 : 3)) % 7
+  const span = n >= 8 && progression.every((d, i) => i % 2 === 0 || d === progression[i - 1]) ? 2 : 1
+  for (let i = 0; i < n; i += span) {
+    if (!rng.chance(0.3)) continue
+    // A relative that doesn't just repeat the chord before or after it
+    const prev = out[(i - 1 + n) % n]!
+    const next = out[(i + span) % n]!
+    const relatives = [(out[i]! + 2) % len, (out[i]! + len - 2) % len].filter(
+      (d) => vocab.includes(d) && d !== prev && d !== next,
+    )
+    if (relatives.length === 0) continue
+    const pick = rng.pick(relatives)
+    for (let k = 0; k < span; k++) out[i + k] = pick
   }
   if (out.every((d, i) => d === progression[i])) {
-    const i = rng.int(0, n - 1)
-    out[i] = (out[i]! + 3) % 7
+    const i = rng.int(0, n / span - 1) * span
+    for (let k = 0; k < span; k++) out[i + k] = (out[i]! + 3) % len
   }
-  return out.map(clampDegree)
+  return out.map(clampRoot)
 }
 
+/** Phrase plans for B's melody: the theme's motif answered and developed over the new chords. */
+const B_PLANS: readonly (readonly PhraseBar[])[] = [
+  ['statement', 'answer', 'sequence', 'cadence'],
+  ['statement', 'sequence', 'answer', 'cadence'],
+  ['answer', 'statement', 'sequence', 'cadence'],
+]
+
 /**
- * A new melody over the new chords: the theme's rhythm (with a note added on each empty beat),
- * each note a chord tone of its bar, moving mostly by small steps.
+ * A new melody over the new chords, built from the theme's motif (its busiest bar's rhythm and
+ * shape): stated, answered by its mirror image (MusicTheoryJS diatonic inversion), moved
+ * through the scale with the harmony, and closed with a cadence. Related to A, but a new tune.
  */
-function newMelody(theme: MusicGenome, progression: readonly number[], rng: Rng): (number | null)[] {
-  const spb = theme.stepsPerBar
-  const beat = Math.max(1, spb / 4)
-  const notes: (number | null)[] = theme.melody.notes.map(() => null)
-  let prev = theme.melody.notes.find((d) => d !== null) ?? 4
-  for (let i = 0; i < notes.length; i++) {
-    const onset = theme.melody.notes[i] !== null || (i % beat === 0 && rng.chance(0.35))
-    if (!onset) continue
-    const root = progression[Math.floor(i / spb)] ?? 0
-    const tones = [root, root + 2, root + 4, root + 7].map((t) => clampDegree(t % 8))
-    // Keep some of the theme's notes that still fit the new chord, as a shared motif
-    const kept = theme.melody.notes[i]
-    if (kept !== null && kept !== undefined && tones.includes(kept) && rng.chance(0.6)) {
-      prev = kept
-      notes[i] = kept
-      continue
-    }
-    // Prefer tones near the previous note that differ from the theme's note here
-    const ranked = tones
-      .map((t) => ({ t, cost: Math.abs(t - prev) + (t === theme.melody.notes[i] ? 1 : 0) + rng.next() * 2 }))
-      .sort((a, b) => a.cost - b.cost)
-    prev = ranked[0]!.t
-    notes[i] = prev
+function newMelody(theme: MusicGenome, b: MusicGenome, rng: Rng): (number | null)[] {
+  const motif = extractMotif(theme, theme.melody.notes)
+  if (!motif) return theme.melody.notes.map(() => null)
+  // Give the motif a pickup or an extra note sometimes, so B's rhythm isn't A's exactly
+  const rhythm = [...motif.rhythm]
+  const free = rhythm.map((c, i) => (c === '-' && i % 2 === 0 ? i : -1)).filter((i) => i >= 0)
+  let shape = [...motif.shape]
+  if (free.length && rng.chance(0.6)) {
+    const at = rng.pick(free)
+    rhythm[at] = 'x'
+    const k = rhythm.slice(0, at).filter((c) => c === 'x').length
+    shape = [...shape.slice(0, k), (shape[k - 1] ?? 0) + rng.pick([1, 2, -1]), ...shape.slice(k)]
   }
-  return notes
+  const plan = rng.pick(B_PLANS)
+  const anchor = (theme.melody.notes.find((d) => d !== null) ?? 2) + rng.pick([0, 2])
+  const bars = b.bars >= 8 ? plan.flatMap((p) => [p, p === 'cadence' ? 'cadence' : 'rest'] as PhraseBar[]) : plan
+  return composeMelody(b, { rhythm: rhythm.join(''), shape }, bars, { anchor })
 }
 
 /** The theme with new chords, the bass moved to the new roots and a new melody. */
 export function contrastFrom(theme: MusicGenome, rng: Rng): MusicGenome {
   const g = cloneGenome(theme)
-  const spb = g.stepsPerBar
-  g.chords.progression = reharmonise(theme.chords.progression, rng)
-  g.bass.notes = theme.bass.notes.map((d, i) => {
-    if (d === null) return null
-    const bar = Math.floor(i / spb)
-    return clampDegree(d + (g.chords.progression[bar]! - theme.chords.progression[bar]!))
-  })
-  g.melody.notes = newMelody(theme, g.chords.progression, rng)
+  g.chords.progression = reharmonise(theme, rng)
+  if (g.chords.colors) g.chords.colors = g.chords.colors.map(() => null)
+  // The bass keeps its figure: each note keeps its role in the new chord, approach notes re-aim
+  g.bass.notes = rebaseLine(g, theme.bass.notes, theme.chords.progression, g.chords.progression)
+  g.melody.notes = newMelody(theme, g, rng)
   validateGenome(g)
   return g
 }

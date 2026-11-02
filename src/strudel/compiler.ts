@@ -1,23 +1,12 @@
-import type { MusicGenome, ScaleMode } from '../music/genome'
+import type { MusicGenome } from '../music/genome'
 import { DEFAULT_KIT, type SoundKit, type SynthVoice } from '../music/kits'
+import { barChords, chordVoicings } from '../music/harmony'
+import { accentAt, getStyle, type Accents, type FillKind, type GenreStyle } from '../music/styles'
+import { chordTypeIntervals, degreeToMidi } from '../music/theory'
+
+export type { FillKind } from '../music/styles'
 
 const NOTE_NAMES = ['c', 'cs', 'd', 'ds', 'e', 'f', 'fs', 'g', 'gs', 'a', 'as', 'b'] as const
-
-/** Intervals from root for each mode (semitones). */
-const MODE_INTERVALS: Record<ScaleMode, number[]> = {
-  major: [0, 2, 4, 5, 7, 9, 11],
-  minor: [0, 2, 3, 5, 7, 8, 10],
-  dorian: [0, 2, 3, 5, 7, 9, 10],
-  mixolydian: [0, 2, 4, 5, 7, 9, 10],
-  pentatonic: [0, 2, 4, 7, 9],
-  phrygian: [0, 1, 3, 5, 7, 8, 10],
-}
-
-const VOICING_INTERVALS = {
-  triad: [0, 2, 4],
-  seventh: [0, 2, 4, 6],
-  power: [0, 4],
-} as const
 
 /** UI mutes — do not alter the genome, only compilation. */
 export interface LayerMutes {
@@ -25,19 +14,17 @@ export interface LayerMutes {
   bass?: boolean
   melody?: boolean
   chords?: boolean
+  arp?: boolean
 }
 
-/**
- * Scale degree → note name. Degrees past the end of the scale move up an octave,
- * and pitch classes that pass B roll into the next octave so the scale always ascends.
- */
+/** MIDI note → Strudel note name (c4 = 60). */
+function midiNote(midi: number): string {
+  return `${NOTE_NAMES[midi % 12]!}${Math.floor(midi / 12) - 1}`
+}
+
+/** Scale degree → note name; degrees past the end of the scale move up an octave, so lines always ascend. */
 function scaleDegreeNote(genome: MusicGenome, degree: number, octave: number): string {
-  const intervals = MODE_INTERVALS[genome.scale.mode]
-  const len = intervals.length
-  const idx = ((degree % len) + len) % len
-  const octaveShift = Math.floor(degree / len)
-  const semis = genome.scale.root + intervals[idx]! + 12 * (octave + octaveShift)
-  return `${NOTE_NAMES[semis % 12]!}${Math.floor(semis / 12)}`
+  return midiNote(degreeToMidi(genome.scale, degree, octave))
 }
 
 function boolTokens(steps: boolean[], hit: string): string[] {
@@ -48,26 +35,40 @@ function noteTokens(genome: MusicGenome, notes: (number | null)[], octave: numbe
   return notes.map((d) => (d === null ? '~' : scaleDegreeNote(genome, d, octave)))
 }
 
-function chordTokens(genome: MusicGenome): string[] {
-  const { progression, voicing } = genome.chords
-  const stepsPerBar = genome.stepsPerBar
+/**
+ * Chord layer tokens: each bar's voice-led voicing on the chord rhythm, or (pads) one chord
+ * held for the whole bar with `_`.
+ */
+function chordTokens(genome: MusicGenome, pads = false): string[] {
+  const voicings = chordVoicings(genome)
+  const spb = genome.stepsPerBar
   const tokens: string[] = []
-
   for (let bar = 0; bar < genome.bars; bar++) {
-    const rootDeg = progression[bar] ?? 0
-    const intervals = VOICING_INTERVALS[voicing]
-    const chordTones = intervals.map((degOff) => scaleDegreeNote(genome, rootDeg + degOff, 3))
-    const chordToken = `[${chordTones.join(',')}]`
-    for (let s = 0; s < stepsPerBar; s++) {
-      const global = bar * stepsPerBar + s
-      if (genome.chords.rhythm[global]) {
-        tokens.push(chordToken)
-      } else {
-        tokens.push('~')
-      }
+    const token = `[${voicings[bar]!.map(midiNote).join(',')}]`
+    for (let s = 0; s < spb; s++) {
+      if (pads) tokens.push(s === 0 ? token : '_')
+      else tokens.push(genome.chords.rhythm[bar * spb + s] ? token : '~')
     }
   }
   return tokens
+}
+
+/**
+ * Arp layer tokens: each index picks a tone of the bar's chord, stacked up from the root in the
+ * arp's octave (indices past the last tone climb an octave).
+ */
+function arpTokens(genome: MusicGenome): string[] {
+  const arp = genome.arp
+  if (!arp) return []
+  const spb = genome.stepsPerBar
+  const chords = barChords(genome)
+  return arp.pattern.map((idx, i) => {
+    if (idx === null) return '~'
+    const chord = chords[Math.floor(i / spb) % genome.bars]!
+    const ivs = [...new Set(chordTypeIntervals(chord.type).map((x) => x % 12))].sort((a, b) => a - b)
+    const base = 12 * (arp.octave + 1) + chord.root
+    return midiNote(base + ivs[idx % ivs.length]! + 12 * Math.floor(idx / ivs.length))
+  })
 }
 
 /** How a section renders the theme: which layers play and how open the filters are. */
@@ -76,6 +77,10 @@ export interface RenderOptions {
   bass: boolean
   melody: boolean
   chords: boolean
+  /** The arpeggio plays (mid energy and up, builds and breakdowns). */
+  arp: boolean
+  /** Chords held as pads for the whole bar instead of the stab rhythm. */
+  pads: boolean
   /** Bass low-pass cutoff in Hz. */
   bassLpf: number
   chordGain: number
@@ -90,6 +95,8 @@ export const FULL_RENDER: RenderOptions = {
   bass: true,
   melody: true,
   chords: true,
+  arp: true,
+  pads: false,
   bassLpf: 800,
   chordGain: 0.35,
 }
@@ -124,7 +131,13 @@ export function levelForEnergy(e: number): number {
  * Energy → arrangement. Low energy thins drums and drops layers; breakdowns lose kick and bass.
  * Ramping sections render at their higher energy and sweep the filter across the section.
  */
-export function renderForSection(role: string, energy: number, energyEnd: number | undefined, bars: number): RenderOptions {
+export function renderForSection(
+  role: string,
+  energy: number,
+  energyEnd: number | undefined,
+  bars: number,
+  style: GenreStyle = getStyle(undefined),
+): RenderOptions {
   const e = Math.max(energy, energyEnd ?? energy)
   const breakdown = role === 'breakdown'
   const opts: RenderOptions = {
@@ -132,6 +145,8 @@ export function renderForSection(role: string, energy: number, energyEnd: number
     bass: !breakdown && e >= 0.3,
     melody: breakdown || e >= 0.55,
     chords: true,
+    arp: breakdown || role === 'build' || e >= 0.45,
+    pads: style.padRoles.includes(role),
     bassLpf: Math.round(300 + 900 * e),
     chordGain: Number((0.2 + 0.2 * e).toFixed(2)),
   }
@@ -153,6 +168,7 @@ function layerOn(
   opts: RenderOptions,
 ): boolean {
   if (!genome.activeLayers[layer] || mutes?.[layer]) return false
+  if (layer === 'arp') return genome.arp !== undefined && opts.arp
   return layer === 'drums' ? opts.drums !== 'off' : opts[layer]
 }
 
@@ -161,18 +177,20 @@ function layerOn(
  * `swingDelay` cycles; Strudel's swingBy() doubles notes that fill a whole half-slice,
  * so the delay is applied to a separate off-beat pattern instead.
  */
-function layer(ctor: 's' | 'note', tokens: string[], suffix: string, swingDelay: number): string {
-  const offbeats = tokens.some((t, i) => i % 2 === 1 && t !== '~')
-  if (swingDelay <= 0 || !offbeats) return `${ctor}("${tokens.join(' ')}")${suffix}`
-  const on = tokens.map((t, i) => (i % 2 === 0 ? t : '~')).join(' ')
-  const off = tokens.map((t, i) => (i % 2 === 1 ? t : '~')).join(' ')
-  return `stack(${ctor}("${on}"), ${ctor}("${off}").late(${num(swingDelay)}))${suffix}`
+function layer(ctor: 's' | 'note', tokens: string[], suffix: string, swingDelay: number, late = 0): string {
+  const shift = late > 0 ? `.late(${num(late)})` : late < 0 ? `.early(${num(-late)})` : ''
+  const offbeats = tokens.some((t, i) => i % 2 === 1 && t !== '~' && t !== '_')
+  if (swingDelay <= 0 || !offbeats) return `${ctor}("${tokens.join(' ')}")${shift}${suffix}`
+  const on = tokens.map((t, i) => (i % 2 === 0 || t === '_' ? t : '~')).join(' ')
+  const off = tokens.map((t, i) => (i % 2 === 1 && t !== '_' ? t : '~')).join(' ')
+  return `stack(${ctor}("${on}"), ${ctor}("${off}").late(${num(swingDelay)}))${shift}${suffix}`
 }
 
 interface DrumSteps {
   kick: boolean[]
   snare: boolean[]
   hihat: boolean[]
+  perc: boolean[]
 }
 
 /** The genome's drums, thinned for the section's drum level. */
@@ -180,14 +198,16 @@ function drumSteps(genome: MusicGenome, opts: RenderOptions): DrumSteps {
   const spb = genome.stepsPerBar
   const beat = Math.max(1, spb / 4)
   let { kick, snare, hihat } = genome.drums
+  let perc = genome.drums.perc ?? kick.map(() => false)
   if (opts.drums === 'light') {
     kick = thin(kick, (s) => s === 0, spb)
     snare = snare.map(() => false)
     hihat = thin(hihat, (s) => s % beat === 0, spb)
+    perc = perc.map(() => false)
   } else if (opts.drums === 'mid') {
     hihat = thin(hihat, (s) => s % Math.max(1, beat / 2) === 0, spb)
   }
-  return { kick, snare, hihat }
+  return { kick, snare, hihat, perc }
 }
 
 /** `.gain(x)` scaled by the kit's loudness trim; nothing when it comes out at 1. */
@@ -196,12 +216,46 @@ function gainOf(gain: number, kit: SoundKit): string {
   return Math.abs(g - 1) < 1e-6 ? '' : `.gain(${num(g)})`
 }
 
-function drumLayers(d: DrumSteps, swingDelay: number, kit: SoundKit): string[] {
+/** Velocity of a hit where the groove has no accent: a ghost note, not silence. */
+const UNACCENTED = { kick: 0.6, snare: 0.3, hat: 0.35, perc: 0.4 } as const
+
+/**
+ * `.gain(…)` for a drum line: the kit level times the groove's accent on each step (ghost
+ * snares, soft 16th hats), or one value when every hit is equally loud.
+ */
+function accentGain(steps: boolean[], accents: Accents, fallback: number, base: number, kit: SoundKit, spb: number): string {
+  const levels = steps.map((on, i) => (on ? (accentAt(accents, i, spb) || fallback) * base : 0))
+  const played = levels.filter((_, i) => steps[i])
+  if (played.length === 0 || played.every((v) => Math.abs(v - played[0]!) < 1e-6)) return gainOf(played[0] ?? base, kit)
+  return `.gain("${levels.map((v) => num(Number((v * kit.master).toFixed(3)))).join(' ')}")`
+}
+
+/** Micro-timing in cycles of a loop-long pattern, from a fraction of a 16th. */
+function feelDelay(fraction: number | undefined, totalSteps: number, spb: number): number {
+  return fraction ? (fraction * (spb / 16)) / totalSteps : 0
+}
+
+function drumLayers(d: DrumSteps, swingDelay: number, kit: SoundKit, style: GenreStyle, spb: number): string[] {
   const k = kit.drums
+  const g = style.groove
+  const n = d.kick.length
   const layers: string[] = []
-  if (d.kick.some(Boolean)) layers.push(layer('s', boolTokens(d.kick, k.kick), gainOf(1, kit), swingDelay))
-  if (d.snare.some(Boolean)) layers.push(layer('s', boolTokens(d.snare, k.snare), gainOf(1, kit), swingDelay))
-  if (d.hihat.some(Boolean)) layers.push(layer('s', boolTokens(d.hihat, k.hat), gainOf(k.hatGain, kit), swingDelay))
+  if (d.kick.some(Boolean)) layers.push(layer('s', boolTokens(d.kick, k.kick), accentGain(d.kick, g.kick, UNACCENTED.kick, 1, kit, spb), swingDelay))
+  if (d.snare.some(Boolean)) {
+    layers.push(
+      layer('s', boolTokens(d.snare, k.snare), accentGain(d.snare, g.snare, UNACCENTED.snare, 1, kit, spb), swingDelay, feelDelay(g.feel?.snare, n, spb)),
+    )
+  }
+  if (d.hihat.some(Boolean)) {
+    layers.push(
+      layer('s', boolTokens(d.hihat, k.hat), accentGain(d.hihat, g.hat, UNACCENTED.hat, k.hatGain, kit, spb), swingDelay, feelDelay(g.feel?.hat, n, spb)),
+    )
+  }
+  if (k.perc && d.perc.some(Boolean)) {
+    layers.push(
+      layer('s', boolTokens(d.perc, k.perc.sample), accentGain(d.perc, g.perc, UNACCENTED.perc, k.perc.gain, kit, spb), swingDelay, feelDelay(g.feel?.perc, n, spb)),
+    )
+  }
   return layers
 }
 
@@ -237,6 +291,19 @@ function voice(v: SynthVoice, kit: SoundKit, tempo: number, cutoff = v.lpf, gain
   return out
 }
 
+/** A chord voice softened into a held pad: slow attack, full sustain, long release. */
+function padVoice(v: SynthVoice): SynthVoice {
+  return {
+    ...v,
+    attack: Math.max(v.attack ?? 0, 0.35),
+    decay: undefined,
+    sustain: 0.8,
+    release: Math.max(v.release ?? 0, 1.2),
+    lpf: v.lpf > 0 ? Math.round(v.lpf * 0.8) : 0,
+    room: Math.max(v.room ?? 0, 0.5),
+  }
+}
+
 /** Swing delay in cycles for a pattern whose one cycle holds `steps` grid steps. */
 function swingDelayFor(genome: MusicGenome, steps: number): number {
   const swing = genome.parameters.swing
@@ -266,7 +333,12 @@ function tonalLayers(
   if (layerOn(genome, 'chords', mutes, opts)) {
     // opts.chordGain is relative to the full-loop level of 0.35
     const scale = opts.chordGain / FULL_RENDER.chordGain
-    layers.push(layer('note', chordTokens(genome), voice(kit.chords, kit, t, kit.chords.lpf, scale), swingDelay))
+    const v = opts.pads ? padVoice(kit.chords) : kit.chords
+    layers.push(layer('note', chordTokens(genome, opts.pads), voice(v, kit, t, v.lpf, scale * (opts.pads ? 0.8 : 1)), swingDelay))
+  }
+  if (layerOn(genome, 'arp', mutes, opts)) {
+    const v = kit.arp ?? { ...kit.lead, gain: kit.lead.gain * 0.8 }
+    layers.push(layer('note', arpTokens(genome), voice(v, kit, t), swingDelay))
   }
   return layers
 }
@@ -295,7 +367,10 @@ function genomePattern(
   const layers: string[] = []
   if (layerOn(genome, 'drums', mutes, opts)) {
     const swingDelay = swingDelayFor(genome, genome.stepsPerBar * genome.bars)
-    layers.push(...drumLayers(drumSteps(genome, opts), swingDelay, kit), ...breakLoop(kit, genome.bars, opts))
+    layers.push(
+      ...drumLayers(drumSteps(genome, opts), swingDelay, kit, getStyle(genome.genre), genome.stepsPerBar),
+      ...breakLoop(kit, genome.bars, opts),
+    )
   }
   layers.push(...tonalLayers(genome, mutes, opts, kit))
   let body = loopPattern(layers, genome.bars, indent)
@@ -306,9 +381,6 @@ function genomePattern(
 function sweepSignal(sweep: NonNullable<RenderOptions['sweep']>): string {
   return `saw.range(${sweep.from}, ${sweep.to}).slow(${sweep.bars})`
 }
-
-/** How the last bar of a section leads into the next one. */
-export type FillKind = 'tom' | 'roll' | 'build' | 'riser'
 
 export interface SectionTransition {
   /** Crash cymbal on the section's first beat (a drop landing). */
@@ -323,22 +395,24 @@ const LANDING_ROLES = new Set(['drop', 'peak', 'chorus'])
 
 /**
  * Transitions for section `index`: builds ramp up and drop the kick for their last bar,
- * a section rising into a bigger one ends on a snare roll, others on a tom fill, and a section
- * without drums gets a hi-hat riser. Big sections land on a crash.
+ * a section rising into a bigger one ends on the genre's lift fill (a snare roll, a lo-fi
+ * drop-out), others on its turnaround fill (toms, a drum edit), and a section without drums
+ * gets a hi-hat riser. Big sections land on a crash.
  */
 export function sectionTransition(sections: readonly SongSection[], index: number): SectionTransition {
   const sec = sections[index]!
   const next = sections[index + 1]
   const prev = sections[index - 1]
-  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
+  const style = getStyle(sec.genome.genre)
+  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars, style)
   const end = sec.energyEnd ?? sec.energy
   let fill: FillKind | null = null
   if (next) {
-    const nextOpts = renderForSection(next.role, next.energy, next.energyEnd, next.bars)
+    const nextOpts = renderForSection(next.role, next.energy, next.energyEnd, next.bars, style)
     if (sec.role === 'build') fill = 'build'
     else if (opts.drums === 'off') fill = nextOpts.drums === 'off' ? null : 'riser'
-    else if (next.energy > end + 0.15) fill = 'roll'
-    else fill = 'tom'
+    else if (next.energy > end + 0.15) fill = style.fills.lift
+    else fill = style.fills.turn
   }
   return {
     crash: prev !== undefined && LANDING_ROLES.has(sec.role) && opts.drums !== 'off',
@@ -364,13 +438,16 @@ function fillBar(
   kit: SoundKit,
 ): string[] {
   const spb = genome.stepsPerBar
+  const style = getStyle(genome.genre)
   const slice = (a: boolean[]) => a.slice(bar * spb, (bar + 1) * spb)
-  const base = drumsOn ? drumSteps(genome, opts) : { kick: [], snare: [], hihat: [] }
+  const base = drumsOn ? drumSteps(genome, opts) : { kick: [], snare: [], hihat: [], perc: [] }
   const d: DrumSteps = {
     kick: drumsOn ? slice(base.kick) : Array(spb).fill(false),
     snare: drumsOn ? slice(base.snare) : Array(spb).fill(false),
     hihat: drumsOn ? slice(base.hihat) : Array(spb).fill(false),
+    perc: drumsOn ? slice(base.perc) : Array(spb).fill(false),
   }
+  const drumLine = () => drumLayers(d, swingDelay, kit, style, spb)
   const layers: string[] = []
   const swingDelay = swingDelayFor(genome, spb)
   const quarter = Math.max(1, Math.floor(spb / 4))
@@ -387,9 +464,37 @@ function fillBar(
     for (let i = from; i < spb; i++) {
       d.snare[i] = false
       d.hihat[i] = false
+      d.perc[i] = false
       tokens[i] = toms[Math.floor(((i - from) * toms.length) / quarter)]!
     }
-    layers.push(...drumLayers(d, swingDelay, kit), `s("${tokens.join(' ')}")${gainOf(0.7, kit)}`)
+    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.7, kit)}`)
+    return layers
+  }
+  if (kind === 'stop') {
+    // The beat drops out for the last two beats, with one soft snare pickup on the final 16th
+    const from = spb - half
+    for (let i = from; i < spb; i++) {
+      d.kick[i] = false
+      d.snare[i] = false
+      d.hihat[i] = false
+      d.perc[i] = false
+    }
+    const tokens = emptySteps(spb)
+    tokens[spb - 1] = kit.drums.snare
+    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.45, kit)}`)
+    return layers
+  }
+  if (kind === 'edit') {
+    // A drum edit on the last beat: the snare stutters in 16ths over a kick on the beat
+    const from = spb - quarter
+    const tokens = emptySteps(spb)
+    for (let i = from; i < spb; i++) {
+      d.snare[i] = false
+      d.hihat[i] = false
+      d.kick[i] = i === from
+      tokens[i] = kit.drums.snare
+    }
+    layers.push(...drumLine(), `s("${tokens.join(' ')}").gain(saw.range(${num(0.25 * kit.master)}, ${num(0.85 * kit.master)}))`)
     return layers
   }
   // Snare roll: the last half of the bar (or the whole bar at the end of a build, with no kick)
@@ -398,12 +503,13 @@ function fillBar(
   for (let i = from; i < spb; i++) {
     d.snare[i] = false
     d.hihat[i] = false
+    d.perc[i] = false
     if (kind === 'build') d.kick[i] = false
     // 8ths in the first half of a build's roll, every step after that
     if (i >= spb - half || i % 2 === 0) tokens[i] = kit.drums.snare
   }
   layers.push(
-    ...drumLayers(d, swingDelay, kit),
+    ...drumLine(),
     `s("${tokens.join(' ')}").gain(saw.range(${num(0.3 * kit.master)}, ${num(0.8 * kit.master)}))`,
   )
   return layers
@@ -428,13 +534,16 @@ function sectionSegments(
 ): Segment[] {
   const sec = sections[index]!
   const g = sec.genome
-  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars)
+  const style = getStyle(g.genre)
+  const opts = renderForSection(sec.role, sec.energy, sec.energyEnd, sec.bars, style)
   const t = sectionTransition(sections, index)
   const drumsAllowed = g.activeLayers.drums && !mutes?.drums
   const drumsOn = layerOn(g, 'drums', mutes, opts)
   const loopSwing = swingDelayFor(g, g.stepsPerBar * g.bars)
   const k = kit.drums
-  const drums = drumsOn ? [...drumLayers(drumSteps(g, opts), loopSwing, kit), ...breakLoop(kit, g.bars, opts)] : []
+  const drums = drumsOn
+    ? [...drumLayers(drumSteps(g, opts), loopSwing, kit, style, g.stepsPerBar), ...breakLoop(kit, g.bars, opts)]
+    : []
   const tonal = tonalLayers(g, mutes, opts, kit)
   const ramp =
     t.ramp && drumsAllowed

@@ -49,6 +49,7 @@ const DEFAULT_MUTES: LayerMutes = {
   bass: false,
   melody: false,
   chords: false,
+  arp: false,
 }
 
 function defaultSession(): AppSession {
@@ -77,7 +78,7 @@ function bootState(channelId: string, seed: number): EvolutionState {
       bookmarkIndex: existing.bookmarkIndex ?? null,
     }
   }
-  return createEvolutionState(channelSeed(channel), seed, {
+  return createEvolutionState(channelSeed(channel, seed), seed, {
     personality: channelPersonality(channel),
     channelId,
     config: { candidatesPerGeneration: channel.candidatesPerGeneration },
@@ -415,7 +416,7 @@ export function App() {
     stopMusic()
     setEvolving(false)
     clearChannel(storage, storageIdFor(channelId))
-    const next = createEvolutionState(channelSeed(channel), rngSeed, {
+    const next = createEvolutionState(channelSeed(channel, rngSeed), rngSeed, {
       personality,
       channelId,
       config: { candidatesPerGeneration: channel.candidatesPerGeneration },
@@ -613,7 +614,7 @@ export function App() {
 
       <section className="mutes">
         <span className="mutes-label">Mute layers</span>
-        {(['drums', 'bass', 'melody', 'chords'] as const).map((layer) => (
+        {(['drums', 'bass', 'melody', 'chords', 'arp'] as const).map((layer) => (
           <label key={layer} className="mute-toggle">
             <input
               type="checkbox"
