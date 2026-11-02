@@ -43,7 +43,7 @@ const say = (s: string) => out.push(s)
 // 4. Durations: one gate per layer
 {
   const notes = [0, null, null, null, 2, null, 4, null, 7, null, null, null, null, null, null, null]
-  say(`4. Gate 0.5 gives holds ${noteHolds(notes, 0.5).filter((_, i) => notes[i] !== null).join(', ')} steps; a legato phrase with one staccato note is not representable (one gate per layer), and toHolds()'s per-event lengths ${JSON.stringify(toHolds(seq(0, null, 1, 2), 1, 16).filter((h, i) => [0, 8, 12].includes(i)))} are dropped by toSteps`)
+  say(`4. Gate 0.5 gives holds ${noteHolds(notes, 0.5).filter((_, i) => notes[i] !== null).join(', ')} steps; a legato phrase with one staccato note is not representable (one gate per layer), and toHolds()'s per-event lengths ${JSON.stringify(toHolds(seq(0, null, 1, 2), 1, 16).filter((_, i) => [0, 8, 12].includes(i)))} are dropped by toSteps`)
 }
 
 // 5. Velocity and timing on drums

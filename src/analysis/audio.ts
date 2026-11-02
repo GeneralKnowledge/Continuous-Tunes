@@ -195,20 +195,35 @@ export function estimateTempo(flux: readonly number[], hopSec: number, lo = 60, 
     return s / (env.length - lag)
   }
   const zero = ac(0) || 1
-  let best = 0
-  let bestBpm = 120
-  for (let bpm = lo; bpm <= hi; bpm += 0.5) {
+  const at = (bpm: number) => {
     const lag = 60 / bpm / hopSec
     const l0 = Math.floor(lag)
     const frac = lag - l0
-    const v = ac(l0) * (1 - frac) + ac(l0 + 1) * frac
-    // A mild preference for 90–150, where these genres live (resolves half/double ambiguity)
+    return ac(l0) * (1 - frac) + ac(l0 + 1) * frac
+  }
+  // A mild preference for 90–150, where these genres live, only to pick between half/double
+  // candidates; the peak is then refined without it (the prior alone pulls 126 down to 123.5)
+  let best = 0
+  let bestBpm = 120
+  for (let bpm = lo; bpm <= hi; bpm += 0.5) {
     const prior = Math.exp(-0.5 * (Math.log2(bpm / 120) / 0.9) ** 2)
-    if (v * prior > best) {
-      best = v * prior
+    const v = at(bpm) * prior
+    if (v > best) {
+      best = v
       bestBpm = bpm
     }
   }
+  // Refine: sum the autocorrelation at 1–4 beat lags (sharper peak), ±4 % around the pick
+  let refined = bestBpm
+  let top = -Infinity
+  for (let bpm = bestBpm * 0.96; bpm <= bestBpm * 1.04; bpm += 0.1) {
+    const v = at(bpm) + at(bpm / 2) + at(bpm / 3) + at(bpm / 4)
+    if (v > top) {
+      top = v
+      refined = bpm
+    }
+  }
+  bestBpm = Math.round(refined * 10) / 10
   const lag = Math.round(60 / bestBpm / hopSec)
   return { bpm: bestBpm, clarity: r3(ac(lag) / zero) }
 }
@@ -304,7 +319,13 @@ const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.6
 const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 export const PITCH_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
 
-/** Krumhansl–Kessler key estimate from a mean chroma vector. */
+/**
+ * Key from a mean chroma vector, in two steps: first the diatonic collection (of the 12 major
+ * scales) holding the most energy, which is robust to the extended chords and modal melodies
+ * these genres use; then major or relative minor by Krumhansl–Kessler correlation. A plain
+ * 24-key Krumhansl–Kessler match got the right pitch set for 15 of 27 baseline songs; this gets
+ * more (see docs/research/audio-analysis.md). Modes are reported as their relative major/minor.
+ */
 export function estimateKey(chroma: readonly number[]): { key: string; mode: 'major' | 'minor'; strength: number } {
   const c = (a: readonly number[], b: readonly number[]) => {
     const ma = mean(a), mb = mean(b)
@@ -316,15 +337,24 @@ export function estimateKey(chroma: readonly number[]): { key: string; mode: 'ma
     }
     return n / Math.sqrt(da * db || 1)
   }
-  let best = { key: 'C', mode: 'major' as 'major' | 'minor', strength: -2 }
+  const total = chroma.reduce((a, b) => a + b, 0) || 1
+  const MAJOR = [0, 2, 4, 5, 7, 9, 11]
+  let root = 0
+  let share = -1
   for (let r = 0; r < 12; r++) {
-    const rot = (p: number[]) => p.map((_, i) => p[(i - r + 12) % 12]!)
-    const maj = c(chroma, rot(MAJOR_PROFILE))
-    const min = c(chroma, rot(MINOR_PROFILE))
-    if (maj > best.strength) best = { key: PITCH_NAMES[r]!, mode: 'major', strength: maj }
-    if (min > best.strength) best = { key: PITCH_NAMES[r]!, mode: 'minor', strength: min }
+    const e = MAJOR.reduce((a, i) => a + chroma[(i + r) % 12]!, 0) / total
+    if (e > share) {
+      share = e
+      root = r
+    }
   }
-  return { ...best, strength: r3(best.strength) }
+  const rot = (p: number[], r: number) => p.map((_, i) => p[(i - r + 12) % 12]!)
+  const maj = c(chroma, rot(MAJOR_PROFILE, root))
+  const minRoot = (root + 9) % 12
+  const min = c(chroma, rot(MINOR_PROFILE, minRoot))
+  return maj >= min
+    ? { key: PITCH_NAMES[root]!, mode: 'major', strength: r3(share) }
+    : { key: PITCH_NAMES[minRoot]!, mode: 'minor', strength: r3(share) }
 }
 
 function cosine(a: readonly number[], b: readonly number[]): number {
