@@ -6,6 +6,8 @@ import {
   CHORD_VOICINGS,
   OCTAVE_MAX,
   OCTAVE_MIN,
+  PATTERN_OPS,
+  PATTERN_TARGETS,
   SCALE_DEGREE_MAX,
   SCALE_DEGREE_MIN,
   SCALE_MODES,
@@ -54,6 +56,56 @@ function assertNoteArray(name: string, arr: unknown, len: number): asserts arr i
       )
     }
   }
+}
+
+function assertGate(name: string, v: unknown): void {
+  if (v === undefined) return
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+    throw new GenomeValidationError(`${name} must be 0–1`)
+  }
+}
+
+function assertNoteLayer(name: string, layer: unknown, steps: number): void {
+  if (!isObject(layer)) throw new GenomeValidationError(`${name} must be an object`)
+  assertNoteArray(`${name}.notes`, layer.notes, steps)
+  if (
+    typeof layer.octave !== 'number' ||
+    !Number.isInteger(layer.octave) ||
+    layer.octave < OCTAVE_MIN ||
+    layer.octave > OCTAVE_MAX
+  ) {
+    throw new GenomeValidationError(`${name}.octave must be ${OCTAVE_MIN}–${OCTAVE_MAX}`)
+  }
+  assertGate(`${name}.gate`, layer.gate)
+}
+
+function assertPatternGenes(genes: unknown): void {
+  if (genes === undefined) return
+  if (!Array.isArray(genes)) throw new GenomeValidationError('patterns must be an array')
+  genes.forEach((gene: unknown, i: number) => {
+    const at = `patterns[${i}]`
+    if (!isObject(gene)) throw new GenomeValidationError(`${at} must be an object`)
+    if (!(PATTERN_TARGETS as readonly unknown[]).includes(gene.target)) throw new GenomeValidationError(`${at}.target is unknown`)
+    if (!(PATTERN_OPS as readonly unknown[]).includes(gene.op)) throw new GenomeValidationError(`${at}.op is unknown`)
+    const a = gene.amount
+    const ok =
+      typeof a === 'number' &&
+      Number.isFinite(a) &&
+      (gene.op === 'degrade'
+        ? a >= 0 && a <= 0.9
+        : gene.op === 'ply'
+          ? Number.isInteger(a) && a >= 2 && a <= 4
+          : gene.op === 'off'
+            ? a >= 0.25 && a <= 8
+            : a >= -0.5 && a <= 0.5)
+    if (!ok) throw new GenomeValidationError(`${at}.amount is out of range for ${String(gene.op)}`)
+    if (gene.every !== undefined && (typeof gene.every !== 'number' || !Number.isInteger(gene.every) || gene.every < 1 || gene.every > 16)) {
+      throw new GenomeValidationError(`${at}.every must be an integer 1–16`)
+    }
+    if (gene.chance !== undefined && (typeof gene.chance !== 'number' || !(gene.chance > 0 && gene.chance <= 1))) {
+      throw new GenomeValidationError(`${at}.chance must be in (0, 1]`)
+    }
+  })
 }
 
 function isScaleMode(v: unknown): v is ScaleMode {
@@ -108,27 +160,8 @@ export function validateGenome(raw: unknown): MusicGenome {
   assertBoolArray('drums.hihat', drums.hihat, steps)
   if (drums.perc !== undefined) assertBoolArray('drums.perc', drums.perc, steps)
 
-  if (!isObject(bass)) throw new GenomeValidationError('bass must be an object')
-  assertNoteArray('bass.notes', bass.notes, steps)
-  if (
-    typeof bass.octave !== 'number' ||
-    !Number.isInteger(bass.octave) ||
-    bass.octave < OCTAVE_MIN ||
-    bass.octave > OCTAVE_MAX
-  ) {
-    throw new GenomeValidationError(`bass.octave must be ${OCTAVE_MIN}–${OCTAVE_MAX}`)
-  }
-
-  if (!isObject(melody)) throw new GenomeValidationError('melody must be an object')
-  assertNoteArray('melody.notes', melody.notes, steps)
-  if (
-    typeof melody.octave !== 'number' ||
-    !Number.isInteger(melody.octave) ||
-    melody.octave < OCTAVE_MIN ||
-    melody.octave > OCTAVE_MAX
-  ) {
-    throw new GenomeValidationError(`melody.octave must be ${OCTAVE_MIN}–${OCTAVE_MAX}`)
-  }
+  assertNoteLayer('bass', bass, steps)
+  assertNoteLayer('melody', melody, steps)
 
   if (!isObject(chords)) throw new GenomeValidationError('chords must be an object')
   if (!Array.isArray(chords.progression) || chords.progression.length !== bars) {
@@ -156,6 +189,9 @@ export function validateGenome(raw: unknown): MusicGenome {
     throw new GenomeValidationError(`chords.voicing must be one of ${CHORD_VOICINGS.join(',')}`)
   }
   assertBoolArray('chords.rhythm', chords.rhythm, steps)
+  assertGate('chords.gate', chords.gate)
+  if (raw.counter !== undefined) assertNoteLayer('counter', raw.counter, steps)
+  assertPatternGenes(raw.patterns)
 
   if (raw.arp !== undefined) {
     const arp = raw.arp
@@ -188,6 +224,12 @@ export function validateGenome(raw: unknown): MusicGenome {
   }
   if (activeLayers.arp && raw.arp === undefined) {
     throw new GenomeValidationError('activeLayers.arp needs an arp layer')
+  }
+  if (activeLayers.counter !== undefined && typeof activeLayers.counter !== 'boolean') {
+    throw new GenomeValidationError('activeLayers.counter must be boolean')
+  }
+  if (activeLayers.counter && raw.counter === undefined) {
+    throw new GenomeValidationError('activeLayers.counter needs a counter layer')
   }
 
   if (!isObject(parameters)) throw new GenomeValidationError('parameters must be an object')

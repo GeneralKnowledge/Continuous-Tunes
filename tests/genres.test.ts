@@ -107,8 +107,8 @@ describe('Genres', () => {
   })
 
   it('stores reseeded channels under a new id so old saves do not override the new sound', () => {
-    expect(channelStorageId(getChannel('house'))).toBe('house@v3')
-    expect(channelStorageId(getChannel('minimal'))).toBe('minimal@v3')
-    expect(channelStorageId(getChannel('electronic'))).toBe('electronic@v2')
+    expect(channelStorageId(getChannel('house'))).toBe('house@v4')
+    expect(channelStorageId(getChannel('minimal'))).toBe('minimal@v4')
+    expect(channelStorageId(getChannel('electronic'))).toBe('electronic@v3')
   })
 })

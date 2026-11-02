@@ -34,13 +34,15 @@ Strudel Player  (@strudel/web: initStrudel / evaluate / hush)
 src/
   evolution/    engine, mutation, fitness, selection, generation, song, songs
   music/        genome, seeds, channels, personality, form, validation,
-                theory (Tonal + MusicTheoryJS), styles, harmony, compose, kits
+                theory (Tonal + MusicTheoryJS), styles, harmony, compose, kits,
+                pattern (Tidal-style patterns), motif, generative (Markov, walks,
+                L-systems), context, counter, arrange
   strudel/      compiler, player
   persistence/  session + channel lineage (localStorage; SQLite-ready interface)
   ui/           App
   lib/          deterministic RNG (Mulberry32)
 tests/
-scripts/evolve-cli.ts, render-songs.ts, record-songs.mjs
+scripts/evolve-cli.ts, render-songs.ts, record-songs.mjs, query-strudel.mjs
 ```
 
 ### Music theory layer
@@ -56,6 +58,19 @@ On top of it:
 - `harmony.ts`: the chord of each bar, and voice-led voicings for the whole loop (chosen twice round the loop so the last bar leads smoothly into the first).
 - `compose.ts`: bass figures (root, octave, fifth, approach and passing notes, kick dodging), motif-based melodies with statement / sequence / answer / cadence phrases snapped to chord tones, arp patterns, and chord substitution for reharmonising.
 
+### Composition layer (after TidalCycles, isobar and libcantus)
+
+These modules decide *what music exists*; Strudel still plays it.
+
+- `pattern.ts` (TidalCycles): a pattern is a query from a time span (cycles = bars) to the events that start in it. `seq` (with nested tuplets), `fromSteps`, `euclid` (Bjorklund), `stack`, `cat`, `fast`/`slow`, `late`/`early`, `rev`, `every`/`lastOf`/`whenCycle`, `degradeBy`, `sometimesBy`, `someCyclesBy`, `ply`, `off`, `rot`, `iter`, `chooseBy`. Randomness is a hash of seed and onset time, like Tidal's time-seeded `rand`, so the same seed always gives the same events. `toSteps`/`toHits` write a pattern onto the genome grid; `eventsToMini` writes events as weighted mini-notation (`a@6 b@2 …`) for exact tuplets. Seeds use it for polymetric figures (ambient's arpeggio runs in its own 10-step cycle).
+- `motif.ts`: motif cells (onset, length, degree) and their development: transposition, inversion, retrograde, retrograde inversion, augmentation, diminution, fragmentation, displacement, extension, contraction, repetition with variation, call and response. `placeCell` lands a transformed cell on the harmony at its head and downbeats (as libcantus's `developMotif` does) so it stays recognisable.
+- `generative.ts` (isobar): a Markov chain of order 1–2 with back-off and constraint filters (PMarkov/MarkovLearner), a bounded random walk with weighted steps, gravity and leap recovery (PBrown/PRandomWalk), and L-systems, including isobar's `N + - [ ]` walk for self-similar arpeggio contours.
+- `context.ts`: the shared compositional context: chord tones, roots and harmonic tension per bar, kick/snare positions with the groove's accents, where the melody attacks and where it is still sounding, where bass and chords play. Also `noteHolds`, the one place note lengths are computed.
+- `counter.ts` (libcantus `generateCounterMelody`): a counter-melody that moves in the melody's gaps and holds, sits under it for the whole of each note, prefers thirds and sixths against it, chord tones on strong beats, stepwise and contrary motion, and imitates the previous phrase a third or sixth lower in bars the melody leaves empty. It is derived material: mutations recompose it whenever melody or harmony change.
+- `arrange.ts`: how each section treats its material, per genre (`styles.ts` → `arrange`): augmented or octave-lifted breakdown melodies, fragmented outros, a counter-melody from a given appearance of a highlight (house brings it in on the second drop, trance on the first), role genes (sparse intros, hats doubling through builds), microvariation on a role's second appearance, and builds without bass in genres where the drop should land with it.
+
+Each genre in `styles.ts` also carries its own bass vocabulary (one-bar figures phrase variations draw on, after libcantus's lick dictionary), note-length ranges, pattern genes, counter-melody settings and a motif-identity range for the fitness.
+
 ## Genome
 
 Structured, serialisable data — not arbitrary JS:
@@ -67,10 +82,12 @@ Structured, serialisable data — not arbitrary JS:
 | `scale` | `{ root: 0–11, mode }` |
 | `genre` | optional style id (`house`, `dnb`, …); old genomes without it use the default style |
 | `drums` | kick / snare / hihat (+ optional `perc`) boolean steps |
-| `bass` / `melody` | scale-degree notes + null rests, octave |
-| `chords` | progression, voicing, rhythm, optional per-bar `colors` (`m11`, `sus2`, `7`…) |
+| `bass` / `melody` | scale-degree notes + null rests, octave, optional `gate` (note length as a share of the gap to the next note: 0 = one step, 1 = legato) |
+| `chords` | progression, voicing, rhythm, optional per-bar `colors` (`m11`, `sus2`, `7`…), optional `gate` for stab length |
 | `arp` | optional arpeggio: chord-tone indices per step + octave |
-| `activeLayers` | which layers are on (`arp` optional) |
+| `counter` | optional counter-melody (derived from melody and chords, see `counter.ts`) |
+| `patterns` | optional pattern genes: Tidal-style transforms on one layer (`degrade`, `ply`, `off`, `nudge`), optionally only on the last of every N bars (`every`) or per event with a probability (`chance`). The compiler plays them with Strudel's own `degradeBy`, `ply`, `sometimesBy`, `off`, `lastOf`, `late`, so a 4-bar loop varies on every pass of a 16-bar section. |
+| `activeLayers` | which layers are on (`arp`, `counter` optional) |
 | `parameters.swing` | 0–1 |
 
 New fields are optional, so saved genomes from before still load and sound as they did.
@@ -97,6 +114,8 @@ Same RNG seed ⇒ same lineage (deterministic Mulberry32).
 `ChangeScaleMode`, `AddLayer`, `RemoveLayer`, `ChangeSwing`, `RestructureLength`,
 `ColorChord`, `GhostSnare`, `VaryPercussion`, `ArpContour`, `ArpVariation`, …
 
+Structural mutations work on musical units rather than single steps: **DevelopMotif** rewrites a bar as a development of another bar's phrase (any motif transform, placed on that bar's harmony), **RegenerateMelodyBar** writes a new bar from a second-order Markov chain of the melody's own intervals with another bar's rhythm, **PhraseDensity** thins or extends a phrase, **VaryBassPhrase** re-plays a bar from the genre's bass vocabulary, **ChangeGate** moves note lengths within the genre's range, **Add/Tweak/RemovePatternGene** work on the genre's own transforms, and **ArpLSystem** gives the arpeggio a self-similar contour. Single-step flips are weighted down. The counter-melody follows every change.
+
 Mutations are harmony-aware: bass and melody changes pick chord tones of the bar, a new melody phrase develops the existing motif (repeat, sequence, inversion), a chord change swaps the whole held chord for a related one and moves the bass and melody with it, and mode changes stay inside the genre's modes.
 
 Probabilities live in **mutation config / personality weights**, not hardcoded at call sites.
@@ -110,6 +129,7 @@ Evaluates the genome directly (no audio analysis):
 - **Repetition per layer:** drums should loop, bass grooves repeat in rhythm, melodies vary most
 - rhythmic complexity (off-beat hits, same meaning on 8- and 16-step grids), melodic complexity, mostly-stepwise melodies, variety
 - **Groove interplay:** bass that dodges the kick (house, techno) or locks to it (lo-fi, downtempo), as the genre wants
+- **Musicality** (15% of the score, interpretable checks only): melody bars share the motif's rhythm within the genre's range (`motifIdentity`), the loop's last melody note lands on the harmony, melody sits an octave or so above the bass, a counter-melody answers rather than collides and stays under the melody, note lengths sit in the genre's range, and pattern genes don't wreck the groove (a heavily degraded kick, a pile of genes).
 - **Genre style:** each personality has a tempo range, bass/melody octave ranges, a swing ceiling and core layers; leaving them is penalised so channels keep their identity
 
 Scores against personality **sweet spots**. Penalises empty silence, wall-of-sound chaos, and total stasis. Transparent and tunable — not “more complexity = better”.
@@ -152,7 +172,7 @@ With evolution on, Play starts songs. Evolution off plays the current genome as 
 
 ## Forever playback
 
-- Genome → Strudel code (`setcps` + `stack(...).slow(bars)`, one bar per cycle) → `evaluate()`
+- Genome → Strudel code (`setcps` + `stack(...)`, each layer slowed so one cycle is one bar, then its pattern genes) → `evaluate()`
 - Screen **Wake Lock** while music plays
 - If `evaluate` fails: hush + retry last good pattern
 - Evolution ON flag persists across refresh
@@ -227,6 +247,8 @@ node scripts/record-songs.mjs out.json recordings/ 280 2      # headless Chromiu
 ```
 
 The recorder taps Strudel's output, so it must warm up every sample first; set `RECORD_ONLY=house,dnb` to record a few channels.
+
+`node scripts/query-strudel.mjs <code.js> 0 16` evaluates compiled code in headless Chromium without audio and prints the events it produces (onset, end, value), to check what the compiler and Strudel's transforms actually play.
 
 ## Add a channel
 

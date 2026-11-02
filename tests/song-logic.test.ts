@@ -93,7 +93,7 @@ function regridTo8(g: ReturnType<typeof getSeed>) {
 
 describe('Song mutations', () => {
   it('re-grids 16→8 steps keeping hits on the same beats', () => {
-    const g = cloneGenome(getSeed('electronic'))
+    const g = cloneGenome(getSeed('house'))
     for (let seed = 0; seed < 200; seed++) {
       const r = op('RestructureLength').apply(g, createRng(seed), 'experimental')
       if (!r || r.genome.stepsPerBar !== 8 || r.genome.bars !== 4) continue
@@ -105,12 +105,12 @@ describe('Song mutations', () => {
   })
 
   it('repeats bars instead of padding silence when the loop grows', () => {
-    const g = cloneGenome(getSeed('electronic'))
+    const g = cloneGenome(getSeed('house'))
     for (let seed = 0; seed < 200; seed++) {
       const r = op('RestructureLength').apply(g, createRng(seed), 'experimental')
       if (!r || r.genome.bars !== 8 || r.genome.stepsPerBar !== 16) continue
       expect(r.genome.drums.kick.slice(64)).toEqual(r.genome.drums.kick.slice(0, 64))
-      expect(r.genome.chords.progression).toEqual([0, 5, 3, 4, 0, 5, 3, 4])
+      expect(r.genome.chords.progression).toEqual([0, 3, 6, 4, 0, 3, 6, 4])
       return
     }
     throw new Error('no 8-bar restructure produced')

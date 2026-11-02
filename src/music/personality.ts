@@ -130,9 +130,10 @@ export const PERSONALITIES: Record<string, Personality> = {
       parameters: 0.5,
     },
     sweetSpots: {
-      layerDensity: { drums: 0.3, bass: 0.5, melody: 0.55, chords: 0.25 },
-      density: 0.55,
-      rhythmicComplexity: 0.22,
+      layerDensity: { drums: 0.3, bass: 0.5, melody: 0.3, chords: 0.12 },
+      density: 0.45,
+      // Electro's broken kick is syncopated by design (not a four-on-the-floor)
+      rhythmicComplexity: 0.5,
       melodicComplexity: 0.85,
       variety: 0.62,
     },

@@ -614,7 +614,7 @@ export function App() {
 
       <section className="mutes">
         <span className="mutes-label">Mute layers</span>
-        {(['drums', 'bass', 'melody', 'chords', 'arp'] as const).map((layer) => (
+        {(['drums', 'bass', 'melody', 'chords', 'arp', 'counter'] as const).map((layer) => (
           <label key={layer} className="mute-toggle">
             <input
               type="checkbox"
@@ -747,6 +747,7 @@ export function App() {
         <MetricBar label="melodicComplexity" value={m.melodicComplexity} />
         <MetricBar label="harmonicConsistency" value={m.harmonicConsistency} />
         <MetricBar label="variety" value={m.variety} />
+        <MetricBar label="musicality" value={m.musicality ?? 0} />
       </section>
 
       <section className="log">

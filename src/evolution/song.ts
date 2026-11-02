@@ -15,6 +15,7 @@ import {
   type SongTemplate,
 } from '../music/form'
 import { createRng } from '../lib/rng'
+import { arrangeSections } from '../music/arrange'
 import type { Personality } from '../music/personality'
 import type { ScheduledSong, SongSection } from '../strudel/compiler'
 
@@ -72,7 +73,8 @@ export function composeSong(state: EvolutionState, options: ComposeOptions): Com
       sections.push({ ...section, genome: current.genome, material: 'A' })
     }
   })
-  return { sections, startGeneration: state.generationIndex, state: current, formChanges: [] }
+  // Each section treats its material in its own way (augmented breakdowns, counter-melodies on later drops…)
+  return { sections: arrangeSections(sections, seed), startGeneration: state.generationIndex, state: current, formChanges: [] }
 }
 
 /**

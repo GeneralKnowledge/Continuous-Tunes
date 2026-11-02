@@ -2,7 +2,9 @@ import type { MusicGenome } from '../music/genome'
 import { bassKickOverlap } from '../music/compose'
 import { barChordTones } from '../music/harmony'
 import { getStyle } from '../music/styles'
-import { diatonicChord, scaleLength } from '../music/theory'
+import { degreeToMidi, diatonicChord, scaleLength } from '../music/theory'
+import { counterCollisions, counterSpacing } from '../music/counter'
+import { barCells, rhythmSimilarity, type MotifCell } from '../music/motif'
 import {
   DEFAULT_STYLE,
   type FitnessSweetSpots,
@@ -18,6 +20,13 @@ export interface FitnessMetrics {
   melodicComplexity: number
   harmonicConsistency: number
   variety: number
+  /**
+   * Musicality checks that can be measured honestly (0–1, higher is better): the melody's bars
+   * share a motif to the genre's taste, the loop's last melody note lands on the harmony, the
+   * parts keep their registers, the counter-melody answers rather than doubles, note lengths and
+   * pattern genes stay in the genre's idiom. Optional in records saved before it existed.
+   */
+  musicality?: number
 }
 
 export interface FitnessResult {
@@ -209,6 +218,88 @@ function activeLayerCount(g: MusicGenome): number {
 }
 
 /**
+ * How much the melody's bars share the rhythm of its motif (the most common bar rhythm), 0–1;
+ * null without at least two bars of melody.
+ */
+export function motifIdentity(genome: MusicGenome): number | null {
+  const cells = barCells(genome.melody.notes, genome.stepsPerBar).filter((c): c is MotifCell => c !== null)
+  if (cells.length < 2) return null
+  // The motif: the bar most like the others
+  let best = 0
+  for (const a of cells) {
+    const sim = cells.reduce((sum, b) => sum + (a === b ? 0 : rhythmSimilarity(a, b)), 0) / (cells.length - 1)
+    best = Math.max(best, sim)
+  }
+  return best
+}
+
+/** The loop's last melody note is a tone of its own chord or of the chord it leads into (1), else 0. */
+function cadenceFit(genome: MusicGenome): number | null {
+  const notes = genome.melody.notes
+  let last = -1
+  for (let i = notes.length - 1; i >= 0; i--) if (notes[i] !== null) { last = i; break }
+  if (last < 0) return null
+  const len = scaleLength(genome.scale.mode)
+  const tones = barChordTones(genome)
+  const bar = Math.floor(last / genome.stepsPerBar)
+  const d = mod(notes[last]!, len)
+  return tones[bar]!.has(d) || tones[0]!.has(d) ? 1 : 0
+}
+
+/** Median MIDI pitch of a line. */
+function medianPitch(genome: MusicGenome, notes: readonly (number | null)[], octave: number): number | null {
+  const ps = notes.filter((d): d is number => d !== null).map((d) => degreeToMidi(genome.scale, d, octave)).sort((a, b) => a - b)
+  return ps.length === 0 ? null : ps[Math.floor(ps.length / 2)]!
+}
+
+/** Gene sanity: a groove's kick and backbeat stay mostly intact; a handful of genes, not a pile. */
+function geneFit(genome: MusicGenome): number {
+  const genes = genome.patterns ?? []
+  let fit = genes.length > 6 ? 0.7 : 1
+  const ambient = genome.genre === 'ambient'
+  for (const g of genes) {
+    if (g.op !== 'degrade' || g.every !== undefined) continue
+    if (g.target === 'kick' && g.amount > 0.12 && !ambient) fit *= 0.6
+    if (g.target === 'snare' && g.amount > 0.25 && !ambient) fit *= 0.75
+    if (g.target === 'bass' && g.amount > 0.2) fit *= 0.75
+  }
+  return fit
+}
+
+/**
+ * The musicality checks (see FitnessMetrics.musicality). Each check only counts where it means
+ * something (a counter check only with a counter line, a register check only with bass and melody).
+ */
+export function musicality(genome: MusicGenome): number {
+  const style = getStyle(genome.genre)
+  const parts: { v: number; w: number }[] = []
+  if (genome.activeLayers.melody) {
+    const id = motifIdentity(genome)
+    if (id !== null) parts.push({ v: rangeFit(id, style.motifIdentity, 0.2), w: 0.3 })
+    const cad = cadenceFit(genome)
+    if (cad !== null) parts.push({ v: cad, w: 0.15 })
+    if (genome.activeLayers.bass) {
+      const mel = medianPitch(genome, genome.melody.notes, genome.melody.octave)
+      const bass = medianPitch(genome, genome.bass.notes, genome.bass.octave)
+      if (mel !== null && bass !== null) parts.push({ v: Math.max(0, Math.min(1, (mel - bass) / 12)), w: 0.15 })
+    }
+    if (genome.activeLayers.counter) {
+      const col = counterCollisions(genome)
+      const gap = counterSpacing(genome)
+      if (col !== null) parts.push({ v: 1 - col, w: 0.1 })
+      if (gap !== null) parts.push({ v: gap >= 1 ? 1 : 0.3, w: 0.1 })
+    }
+    if (genome.melody.gate !== undefined) parts.push({ v: rangeFit(genome.melody.gate, style.gates.melody, 0.15), w: 0.05 })
+  }
+  if (genome.activeLayers.bass && genome.bass.gate !== undefined) {
+    parts.push({ v: rangeFit(genome.bass.gate, style.gates.bass, 0.15), w: 0.05 })
+  }
+  parts.push({ v: geneFit(genome), w: 0.1 })
+  const total = parts.reduce((a, p) => a + p.w, 0)
+  return parts.reduce((a, p) => a + p.v * p.w, 0) / total
+}
+
+/**
  * Evaluate genome with transparent musical heuristics.
  * Not "more complexity = better" — scores against sweet spots and
  * penalises empty chaos and total stasis.
@@ -278,6 +369,7 @@ export function evaluateFitness(
     melodicComplexity,
     harmonicConsistency: harmonic,
     variety,
+    musicality: musicality(genome),
   }
 
   // Distance from sweet spots (gaussian-ish). Density is judged per layer so a busy
@@ -318,13 +410,15 @@ export function evaluateFitness(
     : 1
 
   let score =
-    densityFit * 0.18 +
-    rhythmFit * 0.14 +
-    melodyFit * 0.12 +
-    varietyFit * 0.12 +
-    repetitionFit * 0.1 +
-    harmonic * 0.24 +
-    smoothFit * 0.1
+    (densityFit * 0.18 +
+      rhythmFit * 0.14 +
+      melodyFit * 0.12 +
+      varietyFit * 0.12 +
+      repetitionFit * 0.1 +
+      harmonic * 0.24 +
+      smoothFit * 0.1) *
+      0.85 +
+    metrics.musicality! * 0.15
 
   score *= 0.85 + 0.15 * interplay
 
