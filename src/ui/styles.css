@@ -317,3 +317,153 @@ footer {
   margin-left: auto;
   font-size: 0.75rem;
 }
+
+/* Music / Speech tabs */
+.tabs {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0.75rem 1rem 0;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.tabs button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.9rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.tabs button.active {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: rgba(61, 154, 106, 0.12);
+}
+
+/* Speech panel */
+.speech-input textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.6rem;
+  background: var(--track);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  resize: vertical;
+  margin-bottom: 1rem;
+}
+
+.speech .controls input[type='range'] {
+  min-width: 10rem;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.speech footer a {
+  color: var(--muted);
+}
+
+.speech-error {
+  color: #e08a6a;
+  font-size: 0.85rem;
+}
+
+.speech-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.speech-plan,
+.speech-words {
+  margin-bottom: 1.25rem;
+}
+
+.speech-plan h2,
+.speech-words h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+
+.plan-view {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.plan-view .f0 {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.plan-view .seg {
+  fill: var(--track);
+}
+
+.plan-view .seg-vowel {
+  fill: #3a5a48;
+}
+
+.plan-view .seg-stressed {
+  fill: var(--accent);
+}
+
+.plan-view text {
+  fill: var(--muted);
+  font-size: 9px;
+}
+
+.speech-sentence {
+  margin-bottom: 0.6rem;
+}
+
+.speech-sentence-type {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.speech-phrase {
+  display: inline;
+}
+
+.speech-word {
+  display: inline-flex;
+  flex-direction: column;
+  margin: 0.15rem 0.5rem 0.15rem 0;
+  vertical-align: top;
+}
+
+.speech-word .w-text {
+  font-size: 0.85rem;
+}
+
+.speech-word .w-ipa {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.speech-word.src-rules .w-text,
+.speech-word.src-morphology .w-text {
+  text-decoration: underline dotted;
+}
+
+.speech-word.emph .w-text {
+  font-weight: 600;
+}
+
+.speech-boundary {
+  color: var(--accent);
+  margin-right: 0.5rem;
+}
+
+.speech-legend {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
