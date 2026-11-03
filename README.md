@@ -4,6 +4,8 @@ A browser prototype of an **autonomous generative music system**. Music is a str
 
 This is **not** an AI music generator. No LLM, ML model, backend, auth, or cloud database.
 
+It also speaks: a **Speech** tab synthesises British English with the project's own speech engine (see [Speech](#speech-continuous-speech)).
+
 ## Why
 
 Most generative music tools either:
@@ -32,6 +34,7 @@ Strudel Player  (@strudel/web: initStrudel / evaluate / hush)
 
 ```
 src/
+  speech/       Continuous Speech: text → phonemes → prosody → formant synthesis (see below)
   evolution/    engine, mutation, fitness, selection, generation, song, songs
   music/        genome, seeds, channels, personality, form, validation,
                 theory (Tonal + MusicTheoryJS), styles, harmony, compose, kits,
@@ -39,10 +42,12 @@ src/
                 L-systems), context, counter, arrange
   strudel/      compiler, player
   persistence/  session + channel lineage (localStorage; SQLite-ready interface)
-  ui/           App
+  ui/           Shell (Music / Speech tabs), App (music), SpeechPanel
   lib/          deterministic RNG (Mulberry32)
 tests/
 scripts/evolve-cli.ts, render-songs.ts, record-songs.mjs, query-strudel.mjs
+scripts/speech/  say.ts, benchmark.ts, asr_whisper.py (optional), lexicon-node.ts
+docs/speech/     speech architecture, research assessment, licensing
 ```
 
 ### Music theory layer
@@ -70,6 +75,23 @@ These modules decide *what music exists*; Strudel still plays it.
 - `arrange.ts`: how each section treats its material, per genre (`styles.ts` → `arrange`): augmented or octave-lifted breakdown melodies, fragmented outros, a counter-melody from a given appearance of a highlight (house brings it in on the second drop, trance on the first), role genes (sparse intros, hats doubling through builds), microvariation on a role's second appearance, and builds without bass in genres where the drop should land with it.
 
 Each genre in `styles.ts` also carries its own bass vocabulary (one-bar figures phrase variations draw on, after libcantus's lick dictionary), note-length ranges, pattern genes, counter-melody settings and a motif-identity range for the fitness.
+
+## Speech (Continuous Speech)
+
+The **Speech** tab speaks British English text with the project's own synthesiser; music keeps
+playing in the Music tab. Text is normalised (numbers, dates, money, abbreviations), looked up in
+Britfone (MIT) and CMUdict (BSD, converted to British), syllabified and stressed; Klatt's duration
+rules and a British tune model give timing and intonation; a Klatt-style cascade/parallel formant
+synthesiser renders it. Voices are validated parameter sets (the speech "genome"), kept apart from
+the music genome. No external TTS engine, server or model.
+
+```bash
+npx tsx scripts/speech/say.ts "Good morning, how are you?" out.wav
+npx tsx scripts/speech/benchmark.ts speech-out/      # 62-item benchmark: WAVs, report, listening page
+```
+
+Architecture, evaluation results, data sources and licences: [docs/speech/README.md](docs/speech/README.md).
+Which projects were reused or only consulted, and why: [docs/speech/research-assessment.md](docs/speech/research-assessment.md).
 
 ## Genome
 
@@ -270,4 +292,5 @@ The recorder taps Strudel's output, so it must warm up every sample first; set `
 ## License
 
 Prototype code: MIT-style freedom for this repo’s sources.  
-`@strudel/web` is AGPL-3.0 — respect that if you redistribute a bundled build.
+`@strudel/web` is AGPL-3.0 — respect that if you redistribute a bundled build.  
+Speech data: Britfone (MIT) and the CMU Pronouncing Dictionary (BSD-style); their licences ship at `public/licenses/speech-data.txt`.
