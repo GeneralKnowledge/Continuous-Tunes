@@ -4,6 +4,17 @@ import { DEFAULT_KIT, type SoundKit, type SynthVoice } from '../music/kits'
 import { barChords, chordVoicings } from '../music/harmony'
 import { accentAt, getStyle, type Accents, type FillKind, type GenreStyle } from '../music/styles'
 import { chordTypeIntervals, degreeToMidi } from '../music/theory'
+import {
+  bassKickDynamics,
+  drumNudges,
+  drumVelocities,
+  lineDynamics,
+  performanceSeed,
+  phraseGhosts,
+  phrasePickups,
+  type DrumVoice,
+  type PerformanceProfile,
+} from '../music/performance'
 
 export type { FillKind } from '../music/styles'
 
@@ -17,6 +28,33 @@ export interface LayerMutes {
   chords?: boolean
   arp?: boolean
   counter?: boolean
+}
+
+/**
+ * Analysis builds label every layer with `.color(name)` (a control the audio engine ignores), so
+ * the events Strudel produces can be traced back to the layer that made them. Off for playback.
+ */
+let tagLayers = false
+
+/**
+ * How much of each genre's performance (velocity, micro-timing, phrase shape, dynamics between
+ * parts, see music/performance.ts) is played: 1 = as the genre defines it, 0 = every hit exactly as
+ * written (the behaviour before the performance layer, kept for listening comparisons).
+ */
+let performanceDepth = 1
+
+/** The genre's performance profile at the current depth, or undefined for none. */
+function performanceOf(style: GenreStyle): PerformanceProfile | undefined {
+  const p = style.performance
+  if (!p || performanceDepth <= 0) return undefined
+  if (performanceDepth === 1) return p
+  const k = performanceDepth
+  return { ...p, timing: p.timing * k, jitterMs: p.jitterMs * k, velocity: p.velocity * k, phrase: p.phrase * k, expression: p.expression * k, ghosts: p.ghosts && k >= 0.5, hatPickup: p.hatPickup && k >= 0.5 }
+}
+
+/** `.color("name")` in analysis builds, nothing otherwise. */
+function tag(name: string): string {
+  return tagLayers ? `.color("${name}")` : ''
 }
 
 /** MIDI note → Strudel note name (c4 = 60). */
@@ -275,6 +313,11 @@ function drumSteps(genome: MusicGenome, opts: RenderOptions): DrumSteps {
   } else if (opts.drums === 'mid') {
     hihat = thin(hihat, (s) => s % Math.max(1, beat / 2) === 0, spb)
   }
+  if (opts.drums === 'mid' || opts.drums === 'full') {
+    const perf = performanceOf(getStyle(genome.genre))
+    snare = phraseGhosts(perf, snare, kick, spb, genome.bars)
+    if (perf?.hatPickup && hihat.some(Boolean)) hihat = phrasePickups(hihat, kick, spb, genome.bars)
+  }
   return { kick, snare, hihat, perc }
 }
 
@@ -291,8 +334,8 @@ const UNACCENTED = { kick: 0.6, snare: 0.3, hat: 0.35, perc: 0.4 } as const
  * `.gain(…)` for a drum line: the kit level times the groove's accent on each step (ghost
  * snares, soft 16th hats), or one value when every hit is equally loud.
  */
-function accentGain(steps: boolean[], accents: Accents, fallback: number, base: number, kit: SoundKit, spb: number): string {
-  const levels = steps.map((on, i) => (on ? (accentAt(accents, i, spb) || fallback) * base : 0))
+function accentGain(steps: boolean[], accents: Accents, fallback: number, base: number, kit: SoundKit, spb: number, perform: readonly number[] = []): string {
+  const levels = steps.map((on, i) => (on ? (accentAt(accents, i, spb) || fallback) * base * (perform[i] ?? 1) : 0))
   const played = levels.filter((_, i) => steps[i])
   if (played.length === 0 || played.every((v) => Math.abs(v - played[0]!) < 1e-6)) return gainOf(played[0] ?? base, kit)
   return `.gain("${levels.map((v) => num(Number((v * kit.master).toFixed(3)))).join(' ')}")`
@@ -303,6 +346,12 @@ function feelDelay(fraction: number | undefined, totalSteps: number, spb: number
   return fraction ? (fraction * (spb / 16)) / totalSteps : 0
 }
 
+/** `.nudge("…")` (seconds per step) for a drum line's micro-timing; nothing when it is all zero. */
+function nudgeOf(nudges: readonly number[]): string {
+  if (nudges.every((v) => Math.abs(v) < 5e-5)) return ''
+  return `.nudge("${nudges.map((v) => num(Number(v.toFixed(4)))).join(' ')}")`
+}
+
 function drumLayers(
   d: DrumSteps,
   swingDelay: number,
@@ -310,26 +359,33 @@ function drumLayers(
   style: GenreStyle,
   genome: MusicGenome,
   cycles: number,
+  firstBar = 0,
 ): string[] {
   const spb = genome.stepsPerBar
   const k = kit.drums
   const g = style.groove
   const n = d.kick.length
+  const perf = performanceOf(style)
+  const seed = performanceSeed(genome)
+  // Accent × performance velocity, then the line's micro-timing
+  const played = (steps: boolean[], voice: DrumVoice, accents: Accents, fallback: number, base: number) =>
+    accentGain(steps, accents, fallback, base, kit, spb, drumVelocities(perf, voice, steps, spb, seed, firstBar)) +
+    nudgeOf(drumNudges(perf, voice, steps, spb, genome.tempo, seed, firstBar))
   const layers: string[] = []
-  if (d.kick.some(Boolean)) layers.push(layer('s', boolTokens(d.kick, k.kick), accentGain(d.kick, g.kick, UNACCENTED.kick, 1, kit, spb), swingDelay, 0, cycles, genesFor(genome, 'kick')))
+  if (d.kick.some(Boolean)) layers.push(layer('s', boolTokens(d.kick, k.kick), played(d.kick, 'kick', g.kick, UNACCENTED.kick, 1) + tag('kick'), swingDelay, 0, cycles, genesFor(genome, 'kick')))
   if (d.snare.some(Boolean)) {
     layers.push(
-      layer('s', boolTokens(d.snare, k.snare), accentGain(d.snare, g.snare, UNACCENTED.snare, 1, kit, spb), swingDelay, feelDelay(g.feel?.snare, n, spb), cycles, genesFor(genome, 'snare')),
+      layer('s', boolTokens(d.snare, k.snare), played(d.snare, 'snare', g.snare, UNACCENTED.snare, 1) + tag('snare'), swingDelay, feelDelay(g.feel?.snare, n, spb), cycles, genesFor(genome, 'snare')),
     )
   }
   if (d.hihat.some(Boolean)) {
     layers.push(
-      layer('s', boolTokens(d.hihat, k.hat), accentGain(d.hihat, g.hat, UNACCENTED.hat, k.hatGain, kit, spb), swingDelay, feelDelay(g.feel?.hat, n, spb), cycles, genesFor(genome, 'hihat')),
+      layer('s', boolTokens(d.hihat, k.hat), played(d.hihat, 'hihat', g.hat, UNACCENTED.hat, k.hatGain) + tag('hihat'), swingDelay, feelDelay(g.feel?.hat, n, spb), cycles, genesFor(genome, 'hihat')),
     )
   }
   if (k.perc && d.perc.some(Boolean)) {
     layers.push(
-      layer('s', boolTokens(d.perc, k.perc.sample), accentGain(d.perc, g.perc, UNACCENTED.perc, k.perc.gain, kit, spb), swingDelay, feelDelay(g.feel?.perc, n, spb), cycles, genesFor(genome, 'perc')),
+      layer('s', boolTokens(d.perc, k.perc.sample), played(d.perc, 'perc', g.perc, UNACCENTED.perc, k.perc.gain) + tag('perc'), swingDelay, feelDelay(g.feel?.perc, n, spb), cycles, genesFor(genome, 'perc')),
     )
   }
   return layers
@@ -340,14 +396,14 @@ function breakLoop(kit: SoundKit, bars: number, opts: RenderOptions): string[] {
   const loop = kit.drums.loop
   if (!loop || (opts.drums !== 'mid' && opts.drums !== 'full')) return []
   const tokens = Array.from({ length: bars }, () => loop.sample).join(' ')
-  return [`s("${tokens}").fit()${gainOf(loop.gain, kit)}${bars !== 1 ? `.slow(${bars})` : ''}`]
+  return [`s("${tokens}").fit()${gainOf(loop.gain, kit)}${tag('loop')}${bars !== 1 ? `.slow(${bars})` : ''}`]
 }
 
 /**
  * A synth voice as method calls: waveform, filter, envelope, level and effects.
  * `cutoff` overrides the voice's filter (the bass opens with energy), `gainScale` its level.
  */
-function voice(v: SynthVoice, kit: SoundKit, tempo: number, cutoff = v.lpf, gainScale = 1): string {
+function voice(v: SynthVoice, kit: SoundKit, tempo: number, cutoff = v.lpf, gainScale = 1, levels: readonly number[] = []): string {
   let out = `.sound("${v.sound}")`
   if (cutoff > 0) out += `.lpf(${Math.round(cutoff)})`
   if (v.resonance !== undefined) out += `.lpq(${v.resonance})`
@@ -357,7 +413,8 @@ function voice(v: SynthVoice, kit: SoundKit, tempo: number, cutoff = v.lpf, gain
   if (v.sustain !== undefined) out += `.sustain(${v.sustain})`
   if (v.release !== undefined) out += `.release(${v.release})`
   if (v.fm !== undefined) out += `.fm(${v.fm})`
-  out += `.gain(${num(v.gain * gainScale * kit.master)})`
+  const g = v.gain * gainScale * kit.master
+  out += levels.some((l) => Math.abs(l - 1) > 1e-3) ? `.gain("${levels.map((l) => num(Number((g * l).toFixed(4)))).join(' ')}")` : `.gain(${num(g)})`
   if (v.room !== undefined) out += `.room(${v.room})`
   if (v.delay !== undefined) {
     // A dotted eighth at the song's tempo
@@ -402,29 +459,36 @@ function tonalLayers(
   const swingDelay = swingDelayFor(genome, genome.stepsPerBar * genome.bars)
   const t = genome.tempo
   const bars = genome.bars
+  const spb = genome.stepsPerBar
+  const style = getStyle(genome.genre)
+  const expression = performanceOf(style)?.expression ?? 0
   if (layerOn(genome, 'bass', mutes, opts)) {
     const tokens = noteTokens(genome, genome.bass)
     // The bass filter opens with energy: opts.bassLpf is relative to a 1200 Hz full-energy cutoff
     const cutoff = (kit.bass.lpf * opts.bassLpf) / 1200
-    layers.push(layer('note', tokens, voice(kit.bass, kit, t, cutoff), swingDelay, 0, bars, genesFor(genome, 'bass')))
+    const levels = bassKickDynamics(genome.bass.notes, genome.drums.kick, style.bassKick, spb, expression)
+    layers.push(layer('note', tokens, voice(kit.bass, kit, t, cutoff, 1, levels) + tag('bass'), swingDelay, 0, bars, genesFor(genome, 'bass')))
   }
   if (layerOn(genome, 'melody', mutes, opts)) {
     const tokens = noteTokens(genome, genome.melody)
-    layers.push(layer('note', tokens, voice(kit.lead, kit, t), swingDelay, 0, bars, genesFor(genome, 'melody')))
+    const levels = lineDynamics(genome.melody.notes, genome.melody.gate, spb, expression)
+    layers.push(layer('note', tokens, voice(kit.lead, kit, t, kit.lead.lpf, 1, levels) + tag('melody'), swingDelay, 0, bars, genesFor(genome, 'melody')))
   }
   if (layerOn(genome, 'counter', mutes, opts)) {
     const v = kit.counter ?? counterVoice(kit.lead)
-    layers.push(layer('note', noteTokens(genome, genome.counter!), voice(v, kit, t), swingDelay, 0, bars, genesFor(genome, 'counter')))
+    const levels = lineDynamics(genome.counter!.notes, genome.counter!.gate, spb, expression)
+    layers.push(layer('note', noteTokens(genome, genome.counter!), voice(v, kit, t, v.lpf, 1, levels) + tag('counter'), swingDelay, 0, bars, genesFor(genome, 'counter')))
   }
   if (layerOn(genome, 'chords', mutes, opts)) {
     // opts.chordGain is relative to the full-loop level of 0.35
     const scale = opts.chordGain / FULL_RENDER.chordGain
     const v = opts.pads ? padVoice(kit.chords) : kit.chords
-    layers.push(layer('note', chordTokens(genome, opts.pads), voice(v, kit, t, v.lpf, scale * (opts.pads ? 0.8 : 1)), swingDelay, 0, bars, genesFor(genome, 'chords')))
+    layers.push(layer('note', chordTokens(genome, opts.pads), voice(v, kit, t, v.lpf, scale * (opts.pads ? 0.8 : 1)) + tag('chords'), swingDelay, 0, bars, genesFor(genome, 'chords')))
   }
   if (layerOn(genome, 'arp', mutes, opts)) {
     const v = kit.arp ?? { ...kit.lead, gain: kit.lead.gain * 0.8 }
-    layers.push(layer('note', arpTokens(genome), voice(v, kit, t), swingDelay, 0, bars, genesFor(genome, 'arp')))
+    const levels = lineDynamics(genome.arp!.pattern, undefined, spb, expression * 0.6)
+    layers.push(layer('note', arpTokens(genome), voice(v, kit, t, v.lpf, 1, levels) + tag('arp'), swingDelay, 0, bars, genesFor(genome, 'arp')))
   }
   return layers
 }
@@ -533,13 +597,13 @@ function fillBar(
     hihat: drumsOn ? slice(base.hihat) : Array(spb).fill(false),
     perc: drumsOn ? slice(base.perc) : Array(spb).fill(false),
   }
-  const drumLine = () => drumLayers(d, swingDelay, kit, style, genome, 1)
+  const drumLine = () => drumLayers(d, swingDelay, kit, style, genome, 1, bar)
   const layers: string[] = []
   const swingDelay = swingDelayFor(genome, spb)
   const quarter = Math.max(1, Math.floor(spb / 4))
   const half = Math.max(1, Math.floor(spb / 2))
   if (kind === 'riser') {
-    layers.push(`s("${kit.drums.hat}*${spb}").gain(saw.range(${num(0.05 * kit.master)}, ${num(0.5 * kit.master)}))`)
+    layers.push(`s("${kit.drums.hat}*${spb}").gain(saw.range(${num(0.05 * kit.master)}, ${num(0.5 * kit.master)}))${tag('fill')}`)
     return layers
   }
   if (kind === 'tom') {
@@ -553,7 +617,7 @@ function fillBar(
       d.perc[i] = false
       tokens[i] = toms[Math.floor(((i - from) * toms.length) / quarter)]!
     }
-    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.7, kit)}`)
+    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.7, kit)}${tag('fill')}`)
     return layers
   }
   if (kind === 'stop') {
@@ -567,7 +631,7 @@ function fillBar(
     }
     const tokens = emptySteps(spb)
     tokens[spb - 1] = kit.drums.snare
-    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.45, kit)}`)
+    layers.push(...drumLine(), `s("${tokens.join(' ')}")${gainOf(0.45, kit)}${tag('fill')}`)
     return layers
   }
   if (kind === 'edit') {
@@ -580,7 +644,7 @@ function fillBar(
       d.kick[i] = i === from
       tokens[i] = kit.drums.snare
     }
-    layers.push(...drumLine(), `s("${tokens.join(' ')}").gain(saw.range(${num(0.25 * kit.master)}, ${num(0.85 * kit.master)}))`)
+    layers.push(...drumLine(), `s("${tokens.join(' ')}").gain(saw.range(${num(0.25 * kit.master)}, ${num(0.85 * kit.master)}))${tag('fill')}`)
     return layers
   }
   // Snare roll: the last half of the bar (or the whole bar at the end of a build, with no kick)
@@ -596,7 +660,7 @@ function fillBar(
   }
   layers.push(
     ...drumLine(),
-    `s("${tokens.join(' ')}").gain(saw.range(${num(0.3 * kit.master)}, ${num(0.8 * kit.master)}))`,
+    `s("${tokens.join(' ')}").gain(saw.range(${num(0.3 * kit.master)}, ${num(0.8 * kit.master)}))${tag('fill')}`,
   )
   return layers
 }
@@ -634,10 +698,10 @@ function sectionSegments(
   const ramp =
     t.ramp && drumsAllowed
       ? [
-          `s("[${k.hat}*16, ${k.snare}*4]").gain(saw.range(${num(0.05 * kit.master)}, ${num(0.5 * kit.master)}).slow(${sec.bars}))`,
+          `s("[${k.hat}*16, ${k.snare}*4]").gain(saw.range(${num(0.05 * kit.master)}, ${num(0.5 * kit.master)}).slow(${sec.bars}))${tag('ramp')}`,
         ]
       : []
-  const crash = t.crash && drumsAllowed ? [`s("${k.crash}")${gainOf(0.5, kit)}`] : []
+  const crash = t.crash && drumsAllowed ? [`s("${k.crash}")${gainOf(0.5, kit)}${tag('crash')}`] : []
   const fill = t.fill && drumsAllowed && sec.bars > 1 ? t.fill : null
 
   const level = opts.level
@@ -742,7 +806,26 @@ export function compileTimeline(
   baseTempo: number,
   mutes?: LayerMutes,
   kit: SoundKit = DEFAULT_KIT,
+  options: CompileOptions = {},
 ): string {
+  tagLayers = options.tagLayers === true
+  performanceDepth = Math.max(0, Math.min(1, options.performance ?? 1))
+  try {
+    return timelineCode(songs, baseTempo, mutes, kit)
+  } finally {
+    tagLayers = false
+    performanceDepth = 1
+  }
+}
+
+export interface CompileOptions {
+  /** Label every layer with `.color(name)` for analysis (inaudible). */
+  tagLayers?: boolean
+  /** Performance depth 0–1 (see performanceDepth); 1 by default, 0 plays every hit as written. */
+  performance?: number
+}
+
+function timelineCode(songs: ScheduledSong[], baseTempo: number, mutes: LayerMutes | undefined, kit: SoundKit): string {
   if (songs.length === 0) return `setcps(${cpsFor(baseTempo)})\nsilence`
   const defs: string[] = []
   const parts: string[] = []

@@ -139,7 +139,10 @@ export const KITS: Record<string, SoundKit> = {
     lead: { sound: 'triangle', gain: 0.45, lpf: 2400, attack: 0.03, release: 0.9, room: 0.7, delay: 0.4 },
     chords: { sound: 'supersaw', gain: 0.22, lpf: 1100, attack: 0.6, release: 1.6, room: 0.85 },
     arp: { sound: 'triangle', gain: 0.25, lpf: 2000, attack: 0.01, decay: 0.4, sustain: 0, delay: 0.5, room: 0.8 },
-    master: 2.3,
+    // Measured with src/analysis/audio.ts: 2.3 played at −9.3 LUFS with 1.4 % of samples past full
+    // scale once the composition layer added held pads and a counter-melody; 1.1 brings it back to
+    // the other channels' −15…−16 LUFS
+    master: 1.1,
   },
   // Downtempo: laid-back kit, electric piano chords, a warm round bass
   downtempo: {
