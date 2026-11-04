@@ -88,10 +88,12 @@ pre:empty{{display:none}}
 </main>
 <script>
 const KEY={json.dumps({it['id']: it['key'] for it in items})};
-document.querySelectorAll('input').forEach(r=>r.addEventListener('input',()=>r.nextElementSibling.value=r.value));
+const SAVE='listen-multi-scores';let saved={{}};try{{saved=JSON.parse(localStorage.getItem(SAVE)||'{{}}')}}catch(e){{}}
+document.querySelectorAll('input').forEach(r=>{{if(saved[r.id]!=null){{r.value=saved[r.id];r.nextElementSibling.value=r.value}}
+r.addEventListener('input',()=>{{r.nextElementSibling.value=r.value;saved[r.id]=r.value;try{{localStorage.setItem(SAVE,JSON.stringify(saved))}}catch(e){{}}}})}});
 document.getElementById('x').onclick=()=>{{const s={{}};document.querySelectorAll('input').forEach(r=>{{const e=KEY[r.dataset.i][+r.dataset.n];(s[e]=s[e]||[]).push(+r.value)}});
 const rows=Object.entries(s).map(([e,v])=>[e,v.reduce((a,b)=>a+b,0)/v.length]).sort((a,b)=>b[1]-a[1]);
-document.getElementById('r').textContent='mean score per engine\n'+rows.map(([e,m])=>e.padEnd(22)+m.toFixed(1)).join('\n')+'\n\nraw: '+JSON.stringify(s)}};
+document.getElementById('r').textContent='mean score per engine\\n'+rows.map(([e,m])=>e.padEnd(22)+m.toFixed(1)).join('\\n')+'\\n\\nraw: '+JSON.stringify(s)}};
 </script>"""
     open(os.path.join(out, 'index.html'), 'w').write(page)
     print(f'{len(items)} items × {len(engines)} versions → {out}/index.html')
