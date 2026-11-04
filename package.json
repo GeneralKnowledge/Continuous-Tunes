@@ -18,6 +18,7 @@
     "britfone": "^100.0.1",
     "cmu-pronouncing-dictionary": "^3.0.0",
     "musictheoryjs": "^3.2.2",
+    "pink-trombone-mod": "^0.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tonal": "^6.5.1"

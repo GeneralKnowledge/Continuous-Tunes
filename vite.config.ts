@@ -11,5 +11,8 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
+    // pink-trombone-mod ships ESM with extensionless relative imports, which Node's own loader
+    // rejects; let Vite transform it like source.
+    server: { deps: { inline: ['pink-trombone-mod'] } },
   },
 })

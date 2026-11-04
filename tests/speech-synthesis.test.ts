@@ -360,3 +360,75 @@ describe('M5 connected speech', () => {
     expect(validateVoice(M1_VOICE).voice.frontend).toBe('m1')
   })
 })
+
+describe('hybrid research backends', () => {
+  it('tract: a uniform 17 cm tube resonates near 500/1500/2500 Hz', async () => {
+    const { tractFormants } = await import('../src/speech/backends/tract/acoustics')
+    const { TRACT_RATE } = await import('../src/speech/backends/tract/shapes')
+    const f = tractFormants(new Array(44).fill(1.5), 3, 0.01, TRACT_RATE)
+    expect(f[0]).toBeGreaterThan(400)
+    expect(f[0]).toBeLessThan(620)
+    expect(f[1]).toBeGreaterThan(1300)
+    expect(f[1]).toBeLessThan(1700)
+    expect(f[2]).toBeGreaterThan(2250)
+    expect(f[2]).toBeLessThan(2750)
+  })
+
+  it('tract: renders a sentence with sound in it and is deterministic', () => {
+    const voice = { ...DEFAULT_VOICE, backend: 'tract' }
+    const a = speak('A big ship.', voice, { lexicon })
+    const b = speak('A big ship.', voice, { lexicon })
+    expect(audioHash(a.samples)).toBe(audioHash(b.samples))
+    expect(rms(a.samples)).toBeGreaterThan(0.005)
+    expect(a.samples.every((x) => Number.isFinite(x))).toBe(true)
+  })
+
+  it('units: concatenates a tiny diphone database and reports missing diphones', async () => {
+    const units = await import('../src/speech/backends/units')
+    const sr = 16000
+    // one synthetic voiced diphone _-ɑː and ɑː-_ (120 Hz pulse train), everything else missing
+    const len = 1600
+    const pcm = new Int16Array(len * 2)
+    const marks: number[] = []
+    for (let i = 0; i < len; i += Math.round(sr / 120)) marks.push(i)
+    for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(8000 * Math.sin((2 * Math.PI * 240 * i) / sr))
+    units.setUnitDatabase({
+      sampleRate: sr,
+      speakerF0: 120,
+      pcm,
+      units: {
+        '_-ɑː': { offset: 0, length: len, mid: len / 2, marks: marks.filter((m) => m >= len / 2) },
+        'ɑː-_': { offset: len, length: len, mid: len / 2, marks: marks.filter((m) => m < len / 2) },
+      },
+    })
+    try {
+      const p = plan('Ah.')
+      const out = units.renderUnits(p, DEFAULT_VOICE, { sampleRate: 16000 })
+      expect(out.length).toBe(Math.ceil(p.duration * 16000))
+      expect(rms(out)).toBeGreaterThan(0.01)
+      expect(units.lastStats.units).toBeGreaterThan(0)
+      const q = plan('Ah, see.')
+      units.renderUnits(q, DEFAULT_VOICE, { sampleRate: 16000 })
+      expect(units.lastStats.missing.length).toBeGreaterThan(0)
+    } finally {
+      units.setUnitDatabase(null)
+    }
+  })
+
+  it('recorded excitation off leaves the default voice unchanged even with pulses loaded', async () => {
+    const { setExcitationPulses } = await import('../src/speech/backends/formant/klatt')
+    const text = 'Now say bead again.'
+    const before = audioHash(speak(text, DEFAULT_VOICE, { lexicon }).samples)
+    const pulse = Array.from({ length: 256 }, (_, i) => Math.sin((2 * Math.PI * i) / 256) - (i === 200 ? 4 : 0))
+    setExcitationPulses([pulse, pulse])
+    try {
+      expect(audioHash(speak(text, DEFAULT_VOICE, { lexicon }).samples)).toBe(before)
+      const rex = validateVoice({ ...DEFAULT_VOICE, source: { ...DEFAULT_VOICE.source, excitation: 1 } }).voice
+      const r = speak(text, rex, { lexicon })
+      expect(audioHash(r.samples)).not.toBe(before)
+      expect(r.samples.every((x) => Number.isFinite(x))).toBe(true)
+    } finally {
+      setExcitationPulses(null)
+    }
+  })
+})

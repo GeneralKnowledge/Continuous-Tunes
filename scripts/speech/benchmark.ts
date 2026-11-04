@@ -11,10 +11,19 @@
  * A voice can be a preset id or a JSON file holding a SpeechVoice (an experiment's genome).
  * If <outDir>/asr*.json exist (from scripts/speech/asr_whisper.py; asr.json = Whisper base.en,
  * asr.small.json = small.en, …), word error rates and diagnostic scores are added per model.
+ *
+ * --units <dir> loads a diphone database (scripts/speech/corpus/build-units.py) for --backend units.
+ * --pulses <file.json> loads recorded excitation pulses (corpus/extract-pulses.py) for voices with
+ * source.excitation > 0.
+ * --wavs <dir> [--name label] scores audio rendered outside the app instead of rendering it
+ * (<dir>/<id>.wav, e.g. from scripts/speech/external/render.py); the plan is still computed so
+ * same-plan engines get the pitch and voicing checks. Per-phone acoustics are skipped for them,
+ * because an engine with its own timing would be measured at the wrong places.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { encodeWav, getVoicePreset, speak, validateVoice, withControls, type SpeechVoice } from '../../src/speech'
+import { decodeWav, resample } from '../../src/speech/audio'
 import { BENCHMARK_SETS, scoreDiagnostic, type BenchmarkSet } from '../../src/speech/benchmark'
 import {
   audioHash,
@@ -31,6 +40,9 @@ import {
 } from '../../src/speech/metrics'
 import { formatPronunciation } from '../../src/speech/phonemes'
 import { loadNodeLexicon } from './lexicon-node'
+import { loadNodeUnits } from './units-node'
+import { setUnitDatabase } from '../../src/speech/backends/units'
+import { setExcitationPulses } from '../../src/speech/backends/formant/klatt'
 import { createRequire } from 'node:module'
 
 const args = process.argv.slice(2)
@@ -41,6 +53,12 @@ const flag = (name: string) => {
 const setName = (flag('set') ?? 'core') as BenchmarkSet
 const backendOverride = flag('backend')
 const seed = Number(flag('seed') ?? 1)
+const unitsDir = flag('units')
+if (unitsDir) setUnitDatabase(loadNodeUnits(unitsDir))
+const pulsesFile = flag('pulses')
+if (pulsesFile) setExcitationPulses((JSON.parse(readFileSync(pulsesFile, 'utf8')) as { pulses: number[][] }).pulses)
+const wavsDir = flag('wavs')
+const externalName = flag('name')
 const BENCHMARK = BENCHMARK_SETS[setName]
 if (!BENCHMARK) throw new Error(`unknown set ${setName}`)
 const outDir = args[0] ?? 'speech-benchmark'
@@ -48,7 +66,10 @@ const voiceSpecs = (args[1] ?? 'alder').split(',')
 const voices: SpeechVoice[] = voiceSpecs.map((spec) =>
   spec.endsWith('.json') ? validateVoice(JSON.parse(readFileSync(spec, 'utf8')) as SpeechVoice).voice : getVoicePreset(spec),
 )
-const voiceIds = voices.map((v, i) => (voiceSpecs[i]!.endsWith('.json') ? basename(voiceSpecs[i]!, '.json') : v.id))
+const voiceIds = wavsDir
+  ? [externalName ?? basename(wavsDir)]
+  : voices.map((v, i) => (voiceSpecs[i]!.endsWith('.json') ? basename(voiceSpecs[i]!, '.json') : v.id))
+if (wavsDir) voices.splice(1)
 const lexicon = loadNodeLexicon()
 mkdirSync(outDir, { recursive: true })
 
@@ -96,10 +117,14 @@ for (const [vi, voiceId] of voiceIds.entries()) {
     const t0 = performance.now()
     const r = speak(item.text, voice, opts)
     const renderMs = performance.now() - t0
+    if (wavsDir) {
+      const ext = decodeWav(readFileSync(join(wavsDir, `${item.id}.wav`)))
+      r.samples = resample(ext.samples, ext.sampleRate, r.sampleRate)
+    }
     audioSeconds += r.samples.length / r.sampleRate
     renderSeconds += renderMs / 1000
-    const again = speak(item.text, voice, opts)
-    acoustics[voiceId]!.push(...segmentAcoustics(r.samples, r.sampleRate, r.plan))
+    const again = wavsDir ? r : speak(item.text, voice, opts)
+    if (!wavsDir) acoustics[voiceId]!.push(...segmentAcoustics(r.samples, r.sampleRate, r.plan))
     const file = `${voiceId}/${item.id}.wav`
     writeFileSync(join(outDir, file), encodeWav(r.samples, r.sampleRate))
     if (voiceId === voiceIds[0]) utterances.push(r.utterance)
