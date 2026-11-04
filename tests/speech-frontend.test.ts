@@ -127,6 +127,23 @@ describe('numbers and text normalisation', () => {
     expect(s[3]!.phrases.map((p) => p.boundary)).toEqual(['clause', 'sentence'])
     expect(normalizeText('  ')).toEqual([])
   })
+
+  it('reads ranges, decades, ratios and fractions', () => {
+    expect(words('Pages 5-10 and 5–10, from 1990-1995, 10-20% more')).toBe(
+      'pages five to ten and five to ten from nineteen ninety to nineteen ninety-five ten to twenty percent more'.replace(/-/g, ' '),
+    )
+    expect(words('COVID-19 and -5 degrees')).toBe('covid nineteen and minus five degrees')
+    expect(words("The 1990s, the 80s and the '60s")).toBe('the nineteen nineties the eighties and the sixties')
+    expect(words('A 2:1 win at 2:30')).toBe('a two to one win at two thirty')
+    expect(words('1/2, 3/4, 5/8 and 24/7')).toBe('one half three quarters five eighths and twenty four seven')
+    expect(words('Call 020-7946-0958')).toBe('call oh two oh seven nine four six oh nine five eight')
+  })
+
+  it('reads Unicode fractions, powers and non-ASCII digits instead of dropping them', () => {
+    expect(words('1½ cups and ¾ of it')).toBe('one and a half cups and three quarters of it')
+    expect(words('x² and 5 m³')).toBe('x squared and five metres cubed')
+    expect(words('٣ and ７ and १०')).toBe('three and seven and ten')
+  })
 })
 
 describe('letter-to-sound and morphology fallback', () => {
