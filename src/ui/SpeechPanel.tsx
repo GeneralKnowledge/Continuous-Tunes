@@ -6,6 +6,7 @@ import { loadLexicon } from '../speech/lexicon-loader'
 import type { Lexicon } from '../speech/lexicon'
 import { planMetrics } from '../speech/metrics'
 import { compileStrudelSpeech } from '../speech/strudel/compile'
+import { compileStrudelVoice } from '../speech/strudel/instrument/compile'
 import { formatPronunciation } from '../speech/phonemes'
 import { PAUSE, type SpeechPlan } from '../speech/plan'
 import {
@@ -169,11 +170,11 @@ export function SpeechPanel() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  async function copyStrudel() {
+  async function copyStrudel(engine: 'instrument' | 'patterns') {
     const r = render()
     if (!r) return
     const voice = withControls(getVoicePreset(settings.voiceId), { rate: settings.rate, pitch: settings.pitch })
-    const { code } = compileStrudelSpeech(r.plan, voice, { text: settings.text })
+    const { code } = engine === 'instrument' ? compileStrudelVoice(r.plan, voice, { text: settings.text }) : compileStrudelSpeech(r.plan, voice, { text: settings.text })
     setStrudel({ key: JSON.stringify(settings), code })
     try {
       await navigator.clipboard.writeText(code)
@@ -259,11 +260,18 @@ export function SpeechPanel() {
           Download WAV
         </button>
         <button
-          onClick={() => void copyStrudel()}
+          onClick={() => void copyStrudel('instrument')}
           disabled={!lexicon || !settings.text.trim()}
-          title="Strudel code that speaks this text with Strudel's own oscillators and filters, for the standard REPL. It always uses the formant voice model, whichever backend is selected above."
+          title="Strudel code that speaks this text, for the standard REPL (strudel.cc). It registers a voice instrument inside Strudel (a glottal source and vocal tract running as an AudioWorklet) and plays the utterance as one continuous sound. Its articulation comes from the formant voice model, whichever backend is selected above."
         >
-          Copy Strudel (formant voice)
+          Copy Strudel voice
+        </button>
+        <button
+          onClick={() => void copyStrudel('patterns')}
+          disabled={!lexicon || !settings.text.trim()}
+          title="The earlier version: plain Strudel patterns only (sawtooth and noise through band-pass filters), no custom sound. Less intelligible."
+        >
+          Copy Strudel (patterns only)
         </button>
       </section>
 

@@ -1,0 +1,191 @@
+/**
+ * Speech as a Strudel instrument: compile a SpeechPlan into a Strudel program that defines its own
+ * voice sound (an AudioWorklet, see processor.ts) and plays the utterance through it.
+ *
+ * Unlike the pattern compiler (../compile.ts), which rebuilds the voice from many short oscillator
+ * events and restarts them every few tens of milliseconds, this instrument is one continuous
+ * sound per utterance: the glottal source keeps its phase and the tract filters keep their state,
+ * while the articulation changes smoothly underneath. TypeScript only plans (phones, timing,
+ * pitch, articulatory/acoustic targets); every sample is generated inside Strudel's audio graph.
+ */
+import type { SpeechPlan } from '../../plan'
+import type { SpeechVoice } from '../../voice'
+import { buildFrames } from '../../backends/formant'
+import type { SynthFrame } from '../../backends/formant/klatt'
+import { voiceProcessorModule } from './processor'
+
+const FRAME = 0.005
+
+/** the order and integer scale must match decodeTrack() in processor.ts */
+export const TRACK_KEYS = ['f0', 'av', 'ah', 'af', 'bp', 'rd', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'b2', 'b3', 'b4', 'b5', 'nz', 'p1', 'w1', 'g1', 'p2', 'w2', 'g2', 'p3', 'w3', 'g3', 'hp'] as const
+type Key = (typeof TRACK_KEYS)[number]
+const SCALE: Partial<Record<Key, number>> = { f0: 10, av: 1000, ah: 1000, af: 1000, bp: 1000, rd: 100, g1: 1000, g2: 1000, g3: 1000 }
+/** how far a straight line between breakpoints may stray from the frames, in the parameter's units */
+const TOL: Record<Key, (v: number) => number> = {
+  f0: () => 0.6,
+  av: () => 0.012,
+  ah: () => 0.012,
+  af: () => 0.012,
+  bp: () => 0.012,
+  rd: () => 0.02,
+  f1: (v) => 0.012 * v,
+  f2: (v) => 0.012 * v,
+  f3: (v) => 0.012 * v,
+  f4: (v) => 0.012 * v,
+  f5: (v) => 0.012 * v,
+  b1: (v) => 0.06 * v,
+  b2: (v) => 0.06 * v,
+  b3: (v) => 0.06 * v,
+  b4: (v) => 0.06 * v,
+  b5: (v) => 0.06 * v,
+  nz: (v) => 0.012 * v,
+  p1: (v) => 0.02 * v,
+  w1: (v) => 0.06 * v,
+  g1: () => 0.012,
+  p2: (v) => 0.02 * v,
+  w2: (v) => 0.06 * v,
+  g2: () => 0.012,
+  p3: (v) => 0.02 * v,
+  w3: (v) => 0.06 * v,
+  g3: () => 0.012,
+  hp: () => 0.5,
+}
+
+export interface StrudelVoiceOptions {
+  text?: string
+  /** silence after the utterance before the pattern repeats, seconds (default 0.6) */
+  tail?: number
+  /** output level inside Strudel, before Strudel's own gain (default 6) */
+  gain?: number
+  seed?: number
+}
+
+export interface StrudelVoice {
+  code: string
+  seconds: number
+  /** length of the encoded control track, characters */
+  trackChars: number
+}
+
+const value = (fr: SynthFrame, k: Key, rd: number): number => {
+  switch (k) {
+    case 'bp':
+      return fr.bypass
+    case 'rd':
+      return fr.rd ?? rd
+    case 'nz':
+      return fr.nz
+    case 'p1':
+    case 'p2':
+    case 'p3':
+      return fr[k]
+    case 'w1':
+      return fr.pb1
+    case 'w2':
+      return fr.pb2
+    case 'w3':
+      return fr.pb3
+    case 'g1':
+      return fr.pg1
+    case 'g2':
+      return fr.pg2
+    case 'g3':
+      return fr.pg3
+    case 'hp':
+      return fr.fhp ?? 0
+    default:
+      return fr[k]
+  }
+}
+
+/** Greedy piecewise-linear fit: breakpoint indices such that every frame lies within tol of the line. */
+export function breakpoints(v: ArrayLike<number>, tol: (x: number) => number): number[] {
+  const out = [0]
+  let a = 0
+  while (a < v.length - 1) {
+    let b = a + 1
+    for (let c = a + 2; c < v.length; c++) {
+      let ok = true
+      for (let m = a + 1; m < c; m++) {
+        const lin = v[a]! + ((v[c]! - v[a]!) * (m - a)) / (c - a)
+        if (Math.abs(lin - v[m]!) > tol(Math.abs(v[m]!))) {
+          ok = false
+          break
+        }
+      }
+      if (!ok) break
+      b = c
+    }
+    out.push(b)
+    a = b
+  }
+  return out
+}
+
+/** Encode the frames as the processor's track string. */
+export function encodeTrack(frames: readonly SynthFrame[], rd: number): string {
+  return TRACK_KEYS.map((k) => {
+    const sc = SCALE[k] ?? 1
+    const v = frames.map((f) => Math.round(value(f, k, rd) * sc) / sc)
+    const bp = breakpoints(v, TOL[k])
+    return bp.map((i, j) => (j === 0 ? `${Math.round(v[i]! * sc)}` : i - bp[j - 1]! === 1 ? `${Math.round(v[i]! * sc)}` : `${i - bp[j - 1]!}:${Math.round(v[i]! * sc)}`)).join(' ')
+  }).join('|')
+}
+
+/** single-quoted JS string literal (Strudel reads double quotes and backticks as mini-notation) */
+const sq = (s: string) => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, '\\n')}'`
+
+/** a short stable hash, so a changed instrument registers under a new worklet name */
+function hash(s: string): string {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
+  return (h >>> 0).toString(36)
+}
+
+/** The instrument's worklet source, as loaded by the program. */
+export function processorSource(name: string): string {
+  // __name: esbuild's keepNames helper (tsx, dev builds) is referenced from inside the function
+  return `var __name = (f) => f;\n(${voiceProcessorModule.toString()})('${name}')`.replace(/[^\t\n\x20-\x7e]/g, '?')
+}
+
+export function compileStrudelVoice(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelVoiceOptions = {}): StrudelVoice {
+  const frames = buildFrames(plan, voice, 48000)
+  const tail = opts.tail ?? 0.6
+  const seconds = plan.duration + tail
+  const track = encodeTrack(frames, voice.source.rd)
+  const src0 = processorSource('NAME')
+  const name = `ct-voice-${hash(src0)}`
+  const src = processorSource(name)
+  const settings = {
+    frameSeconds: FRAME,
+    rd: voice.source.rd,
+    jitter: voice.source.jitter,
+    shimmer: voice.source.shimmer,
+    breath: voice.source.breathiness,
+    tilt: 0.6 * Math.min(1, Math.max(0, voice.source.spectralTilt)),
+    flutter: voice.source.flutter,
+    gain: opts.gain ?? 6,
+    scale: voice.tract.formantScale,
+    seed: opts.seed ?? 1,
+  }
+  const header = opts.text ? `// "${opts.text.replace(/\n/g, ' ')}": spoken by Strudel itself\n` : ''
+  const code = `${header}// Continuous-Tunes voice instrument (${voice.id}): a glottal source and vocal tract running inside
+// Strudel as a registered sound, one continuous voice per utterance. Paste into strudel.cc.
+const ac = getAudioContext()
+ac.ctVoice ??= {}
+ac.ctVoice[${sq(name)}] ??= ac.audioWorklet.addModule('data:text/javascript;base64,' + btoa(${sq(src)}))
+await ac.ctVoice[${sq(name)}]
+const speech = [${sq(track)}]
+const settings = { ${Object.entries(settings).map(([k, v]) => `${k}: ${v}`).join(', ')} }
+registerSound('ctvoice', (t, value, onended) => {
+  const node = new AudioWorkletNode(ac, ${sq(name)}, { numberOfInputs: 0, outputChannelCount: [1],
+    processorOptions: { ...settings, start: Math.round(t * ac.sampleRate), track: speech[value.n ?? 0] } })
+  node.port.onmessage = () => { node.disconnect(); onended() }
+  return { node, stop: () => {} }
+}, { type: 'synth' })
+
+setcps(${(1 / seconds).toFixed(4)})
+s("ctvoice")
+`
+  return { code, seconds, trackChars: track.length }
+}
