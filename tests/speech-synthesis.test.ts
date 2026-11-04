@@ -441,7 +441,8 @@ describe('speech as Strudel code', () => {
     const b = compileStrudelSpeech(p, DEFAULT_VOICE, { text: 'Now say bead again.' })
     expect(a.code).toBe(b.code)
     expect(a.code).toMatch(/^\/\/ "Now say bead again\."/)
-    expect(a.code).toMatch(/setcps\(0\.\d+\)\nstack\(/)
+    expect(a.code).toMatch(/\nsetcps\(0\.\d+\)\n/)
+    expect(a.code).toMatch(/\nstack\(\n[\s\S]*\n\)\n$/)
     expect(a.seconds).toBeGreaterThan(p.duration)
     expect(a.events).toBeGreaterThan(20)
     // nothing to load: only Strudel's built-in oscillators and noise
@@ -454,7 +455,7 @@ describe('speech as Strudel code', () => {
   it('writes an explicit envelope depth on every gliding band-pass event', async () => {
     const { compileStrudelSpeech } = await import('../src/speech/strudel/compile')
     const { code } = compileStrudelSpeech(plan('Hello there.'), DEFAULT_VOICE)
-    const glides = [...code.matchAll(/\.bpf\("([^"]*)"\)\.bpattack/g)].map((m) => m[1]!)
+    const glides = [...code.matchAll(/tract\("([^"]*)"/g)].map((m) => m[1]!)
     expect(glides.length).toBe(4)
     for (const g of glides)
       for (const t of g.split(/\s+/)) {
@@ -464,13 +465,22 @@ describe('speech as Strudel code', () => {
       }
   })
 
-  it('keeps every pattern of a layer on the same number of steps', async () => {
+  it('keeps the direction of formant glides (Strudel runs a negative envelope from the top down)', async () => {
+    const { bpfGlide } = await import('../src/speech/strudel/compile')
+    // upward 1000 → 2000 Hz: base 1000, +1 octave
+    expect(bpfGlide(1000, 2000, 8)).toBe('1000:8.0:1.000')
+    // downward 2000 → 1000 Hz: base is the lower end, depth −1 octave (starts at 1000·2¹ = 2000)
+    expect(bpfGlide(2000, 1000, 8)).toBe('1000:8.0:-1.000')
+    // steady: an explicit tiny depth, never Strudel's default +1 octave
+    expect(bpfGlide(700, 700, 5)).toBe('700:5.0:0.001')
+  })
+
+  it('puts every pattern on the same time grid', async () => {
     const { compileStrudelSpeech } = await import('../src/speech/strudel/compile')
     const { code } = compileStrudelSpeech(plan('Thank you very much.'), DEFAULT_VOICE)
     const steps = (s: string) => s.split(/\s+/).reduce((n, t) => n + (t.includes('@') ? Number(t.split('@')[1]) : 1), 0)
-    for (const layer of code.split(/,\n\s*\/\//)) {
-      const pats = [...layer.matchAll(/\("([^"]*)"\)/g)].filter((m) => m[1] !== 'sawtooth').map((m) => steps(m[1]!))
-      expect(new Set(pats).size).toBe(1)
-    }
+    const pats = [...code.matchAll(/"([^"]*)"/g)].map((m) => m[1]!).filter((x) => x && x !== 'sawtooth' && !x.includes('Thank'))
+    expect(pats.length).toBeGreaterThan(8)
+    expect(new Set(pats.map(steps)).size).toBe(1)
   })
 })

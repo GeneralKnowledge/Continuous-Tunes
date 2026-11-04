@@ -261,9 +261,9 @@ export function SpeechPanel() {
         <button
           onClick={() => void copyStrudel()}
           disabled={!lexicon || !settings.text.trim()}
-          title="Strudel code that speaks this text with Strudel's own oscillators and filters, for the standard REPL"
+          title="Strudel code that speaks this text with Strudel's own oscillators and filters, for the standard REPL. It always uses the formant voice model, whichever backend is selected above."
         >
-          Copy Strudel
+          Copy Strudel (formant voice)
         </button>
       </section>
 
