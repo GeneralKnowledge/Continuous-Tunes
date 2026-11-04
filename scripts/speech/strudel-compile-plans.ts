@@ -3,6 +3,8 @@
  * Strudel voice is scored on exactly the same phones, timing and pitch as the other engines.
  *
  *   npx tsx scripts/speech/strudel-compile-plans.ts <plansDir> <items.json> [voice] [--step 0.02] [--instrument]
+ *
+ * Env STRUDEL_EXPRESSION, STRUDEL_CONSONANTS: expression and consonant settings JSON for experiments.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -24,7 +26,7 @@ const items = readdirSync(plansDir)
   .map((f) => {
     const p = JSON.parse(readFileSync(join(plansDir, f), 'utf8')) as SpeechPlan & { id: string; text: string }
     if (instrument) {
-      const r = compileStrudelVoice(p, voice, { text: p.text, tail: 0.3, engine: process.env.STRUDEL_ENGINE === 'tract' ? 'tract' : 'formant', expression: process.env.STRUDEL_EXPRESSION ? JSON.parse(process.env.STRUDEL_EXPRESSION) : undefined })
+      const r = compileStrudelVoice(p, voice, { text: p.text, tail: 0.3, engine: process.env.STRUDEL_ENGINE === 'tract' ? 'tract' : 'formant', expression: process.env.STRUDEL_EXPRESSION ? JSON.parse(process.env.STRUDEL_EXPRESSION) : undefined, consonants: process.env.STRUDEL_CONSONANTS ? JSON.parse(process.env.STRUDEL_CONSONANTS) : undefined })
       return { id: p.id, code: r.code, seconds: r.seconds, speech: r.seconds - 0.3, events: 1 }
     }
     const r = compileStrudelSpeech(p, voice, { text: p.text, step, tail: 0.3, tune: process.env.STRUDEL_TUNE ? JSON.parse(process.env.STRUDEL_TUNE) : undefined })

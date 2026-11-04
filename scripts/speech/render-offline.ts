@@ -8,7 +8,8 @@
  *
  * items.json: [{ id, text }]. Writes <outDir>/x/<id>.wav (mono int16) and <outDir>/plans/<id>.json
  * (the plan's segments, for measuring phones at known times).
- * Env CONS: consonant settings JSON (consonants.ts) for experiments.
+ * Env CONS: consonant settings JSON (consonants.ts) for experiments. Env ARTIC: a JSON patch of the
+ * voice's articulation (e.g. {"aspirationMs":35}).
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,7 +23,8 @@ const opt = (k: string, d: string) => {
   const i = args.indexOf(k)
   return i >= 0 ? args.splice(i, 2)[1]! : d
 }
-const voice = getVoicePreset(opt('--voice', 'alder'))
+const preset = getVoicePreset(opt('--voice', 'alder'))
+const voice = process.env.ARTIC ? { ...preset, articulation: { ...preset.articulation, ...JSON.parse(process.env.ARTIC) } } : preset
 const rate = Number(opt('--rate', '16000'))
 const [outDir, src] = args
 if (!outDir || !src) throw new Error('usage: render-offline.ts <outDir> <items.json|arctic:a-b>')

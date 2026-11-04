@@ -30,7 +30,7 @@ export function voiceProcessorModule(name: string): void {
   const NOSET = (() => {}) as (...args: number[]) => void
   const ID = (x: number) => x
   /** track parameters, in the order the encoder writes them, and their integer scale */
-  const KEYS = ['f0', 'av', 'ah', 'af', 'bp', 'rd', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'b2', 'b3', 'b4', 'b5', 'nz', 'p1', 'w1', 'g1', 'p2', 'w2', 'g2', 'p3', 'w3', 'g3', 'hp', 'cl']
+  const KEYS = ['f0', 'av', 'ah', 'af', 'bp', 'rd', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'b2', 'b3', 'b4', 'b5', 'nz', 'p1', 'w1', 'g1', 'p2', 'w2', 'g2', 'p3', 'w3', 'g3', 'hp', 'cl', 'ns']
   const SCALE: Record<string, number> = { f0: 10, av: 1000, ah: 1000, af: 1000, bp: 1000, rd: 100, g1: 1000, g2: 1000, g3: 1000, cl: 1000 }
   /** decode a track string: per parameter, breakpoints "v" or "d:v" (d frames on), linear between */
   function decodeTrack(text: string): { frames: number; track: Record<string, Float32Array>; bursts: number[][] } {
@@ -186,6 +186,12 @@ export function voiceProcessorModule(name: string): void {
     clHz?: number
     /** level of the low-passed voicing relative to the unfiltered (makes up the lost bandwidth) */
     clGain?: number
+    /** recorded consonant noise (16 kHz mu-law, base64), indexed by the track's ns - 1 */
+    snd?: string[]
+    /** levels of recorded frication (× af) and releases (× burst gain) */
+    recGain?: number
+    recBurst?: number
+    sndGain?: number[]
   }
 
   const Base = g.AudioWorkletProcessor
@@ -202,6 +208,7 @@ export function voiceProcessorModule(name: string): void {
     hp: ReturnType<typeof highPass>[]
     lf: ReturnType<typeof lfPulse>
     bursts: number[][]
+    snd: Float32Array[]
     done: boolean
     n: number
     constructor(init: { processorOptions: Options }) {
@@ -212,6 +219,27 @@ export function voiceProcessorModule(name: string): void {
       this.tr = t.track
       this.frames = t.frames
       this.bursts = t.bursts
+      // recorded noise: mu-law bytes to float
+      this.snd = (o.snd ?? []).map((b64) => {
+        // base64 by hand: AudioWorkletGlobalScope has no atob
+        const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+        const s64 = b64.replace(/=+$/, '')
+        const bytes: number[] = []
+        for (let j = 0, acc = 0, bits = 0; j < s64.length; j++) {
+          acc = (acc << 6) | A.indexOf(s64[j]!)
+          bits += 6
+          if (bits >= 8) {
+            bits -= 8
+            bytes.push((acc >> bits) & 255)
+          }
+        }
+        const a = new Float32Array(bytes.length)
+        for (let j = 0; j < bytes.length; j++) {
+          const y = bytes[j]! / 127.5 - 1
+          a[j] = (Math.sign(y) * (Math.pow(256, Math.abs(y)) - 1)) / 255
+        }
+        return a
+      })
       this.n = 0
       this.done = false
       this.r = [0, 1, 2, 3, 4].map(() => resonator(false))
@@ -230,7 +258,7 @@ export function voiceProcessorModule(name: string): void {
       this.lf = lfPulse()
       this.lf.setRd(o.rd)
       // running state: glottal phase, period, jitter/shimmer, filters, noise
-      this.s = { phase: 1, period: SR / 120, amp: 1, tilt: 0, prev: 0, lp: 0, rng: o.seed >>> 0 || 1, hpFc: -1, bi: 0, bEnv: 0, bDecay: 1, bAtt: 0, bGain: 0, l1: 0, l2: 0 }
+      this.s = { phase: 1, period: SR / 120, amp: 1, tilt: 0, prev: 0, lp: 0, rng: o.seed >>> 0 || 1, hpFc: -1, bi: 0, bEnv: 0, bDecay: 1, bAtt: 0, bGain: 0, l1: 0, l2: 0, rp: 0, rd: 1, bs: -1, bp: 0 }
     }
     noise(): number {
       // xorshift32, four uniforms summed: roughly Gaussian, unit variance
@@ -266,6 +294,8 @@ export function voiceProcessorModule(name: string): void {
       let g2 = 0
       let g3 = 0
       let cl = 0
+      let ns = 0
+      const step = 16000 / SR
       const lpA = Math.exp((-TWO_PI * (o.clHz ?? 400)) / SR)
       for (let k = 0; k < ch.length; k++) {
         const n = first + k - o.start
@@ -301,6 +331,7 @@ export function voiceProcessorModule(name: string): void {
           g2 = f('g2', i, u)
           g3 = f('g3', i, u)
           cl = f('cl', i, u)
+          ns = Math.round(tr.ns![i]!)
         }
         // --- stop release: a transient at the exact release sample, then burst noise decaying
         // with a place-dependent time constant (Stevens 1998, ch. 7), into the parallel branch
@@ -313,6 +344,13 @@ export function voiceProcessorModule(name: string): void {
           s.bAtt = 0
           s.bDecay = Math.exp(-1 / ((b[2]! / 1000) * SR))
           impulse = b[1]! * 6
+          // a recorded release replaces the synthetic transient and noise
+          if (b[3] && this.snd[b[3] - 1]) {
+            s.bs = b[3] - 1
+            s.bp = 0
+            s.bEnv = 0
+            impulse = 0
+          }
         }
         // --- glottal source: one LF pulse per period; length and shape fixed at the period start
         if (s.phase! >= 1) {
@@ -356,8 +394,27 @@ export function voiceProcessorModule(name: string): void {
           burst = s.bGain! * s.bEnv! * s.bAtt!
           s.bEnv! *= s.bDecay!
         }
-        const fr = this.hp[1]!.step(this.hp[0]!.step(this.noise() * (af * mod + burst) + impulse)) * 0.0055
-        const p = this.q[0]!.step(fr) * g1 + this.q[1]!.step(fr) * g2 + this.q[2]!.step(fr) * g3 + fr * bp
+        const fr = this.hp[1]!.step(this.hp[0]!.step(this.noise() * (ns > 0 ? 0 : af * mod + burst) + impulse)) * 0.0055
+        let p = this.q[0]!.step(fr) * g1 + this.q[1]!.step(fr) * g2 + this.q[2]!.step(fr) * g3 + fr * bp
+        // recorded turbulence, read back and forth through its snippet (no loop seam), shaped by af
+        const rec = ns > 0 ? this.snd[ns - 1] : undefined
+        if (rec) {
+          const j = Math.floor(s.rp!)
+          const v = rec[j]! + (rec[Math.min(rec.length - 1, j + 1)]! - rec[j]!) * (s.rp! - j)
+          s.rp! += step * s.rd!
+          if (s.rp! >= rec.length - 2) s.rd = -1
+          if (s.rp! <= 0) s.rd = 1
+          p += v * af * mod * (o.recGain ?? 0.02) * (o.sndGain?.[ns - 1] ?? 1)
+        }
+        // recorded release, one shot
+        if (s.bs! >= 0) {
+          const r = this.snd[s.bs!]!
+          const j = Math.floor(s.bp!)
+          if (j < r.length - 1) {
+            p += (r[j]! + (r[j + 1]! - r[j]!) * (s.bp! - j)) * s.bGain! * (o.recBurst ?? 0.02) * (o.sndGain?.[s.bs!] ?? 1)
+            s.bp! += step
+          } else s.bs = -1
+        }
         ch[k] = (x + p) * o.gain
       }
       if (this.done) this.port.postMessage('done')

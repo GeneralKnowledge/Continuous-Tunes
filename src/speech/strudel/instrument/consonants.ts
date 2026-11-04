@@ -48,6 +48,15 @@ export interface ConsonantSettings {
    *  the vowel, V1: 8 dB) */
   weakAv: number
   weakAf: number
+  /** voicing scale in the voiced sibilants /z ʒ/ */
+  sibAv: number
+  /** play recorded consonant noise (consonant-noise.ts) instead of synthetic turbulence and
+   *  releases; recGain/recBurst set their levels */
+  recorded: boolean
+  /** with recorded: also replace the fricatives' turbulence (false: releases only) */
+  recFric: boolean
+  recGain: number
+  recBurst: number
   /** depth of the glottal modulation of frication in voiced fricatives (0 = V1's) */
   vmod: number
 }
@@ -68,7 +77,12 @@ export const V1_CONSONANTS: ConsonantSettings = {
   clGain: 2,
   weakAv: 1,
   weakAf: 1,
+  sibAv: 1,
   vmod: 0,
+  recorded: false,
+  recFric: false,
+  recGain: 0.02,
+  recBurst: 0.02,
 }
 
 export const DEFAULT_CONSONANTS: ConsonantSettings = V1_CONSONANTS
@@ -76,6 +90,15 @@ export const DEFAULT_CONSONANTS: ConsonantSettings = V1_CONSONANTS
 const PLACE: Record<string, 'labial' | 'alveolar' | 'velar' | 'postalveolar'> = {
   p: 'labial', b: 'labial', t: 'alveolar', d: 'alveolar', k: 'velar', g: 'velar', tʃ: 'postalveolar', dʒ: 'postalveolar',
 }
+/** order of the recorded snippets as the instrument indexes them */
+export const NOISE_PHONES = ['f', 'v', 'θ', 'ð', 's', 'z', 'ʃ', 'ʒ', 'p', 'b', 't', 'd', 'k', 'g'] as const
+/** level trims for the recorded snippets, dB, measured at recGain = recBurst = 0.02 against the
+ *  awb recordings (consonant-measure.py: fricative level, burst level) */
+export const REC_TRIM_DB: Record<(typeof NOISE_PHONES)[number], number> = {
+  f: -10.7, v: -10.5, θ: -8, ð: -7.3, s: -4.4, z: -5.2, ʃ: -1.1, ʒ: -0.5, p: 5, b: 2, t: -1, d: 1.6, k: -7.5, g: -4,
+}
+const noiseIndex = (ph: string) => (NOISE_PHONES as readonly string[]).indexOf(ph) + 1
+
 const VOICED_STOPS = new Set(['b', 'd', 'g', 'dʒ'])
 const VOICED_FRIC = new Set(['v', 'ð', 'z', 'ʒ'])
 
@@ -89,7 +112,10 @@ export function applyConsonants(frames: SynthFrame[], plan: SpeechPlan, voice: S
   const at = (t: number) => Math.max(0, Math.min(n - 1, Math.round(t / frameSeconds)))
   const strength = voice.articulation.consonantStrength
   const events: string[] = []
-  for (const f of frames) f.cl = 0
+  for (const f of frames) {
+    f.cl = 0
+    f.ns = 0
+  }
   segs.forEach((s, i) => {
     if (s.phone === PAUSE || isVowel(s.phone)) return
     const target = CONSONANTS[s.phone]
@@ -107,11 +133,13 @@ export function applyConsonants(frames: SynthFrame[], plan: SpeechPlan, voice: S
         const finalRelease = s.phraseFinal && s.wordFinal && !target.af && (!next || next.phone === PAUSE) ? 0.35 : 1
         const gain = g0 * (voiced ? x.voicedGain : 1) * strength * finalRelease
         const tau = tau0 * (voiced ? x.voicedTau : 1)
-        if (gain > 0) events.push(`${release.toFixed(4)} ${gain.toFixed(3)} ${tau.toFixed(2)}`)
+        if (gain > 0) events.push(`${release.toFixed(4)} ${gain.toFixed(3)} ${tau.toFixed(2)}${x.recorded && noiseIndex(s.phone) ? ` ${noiseIndex(s.phone)}` : ''}`)
         // the event replaces the frame-rate burst of plain stops; affricates keep their frication
         if (!target.af && x.replace) for (let k = at(release) - 1; k <= at(end) + 1 && k < n; k++) if (k >= 0) frames[k]!.af = 0
       }
-    } else if (VOICED_FRIC.has(s.phone)) {
+    }
+    if (x.recorded && x.recFric && !target.stop && noiseIndex(s.phone)) for (let k = at(s.start) - 1; k <= at(end) && k < n; k++) if (k >= 0) frames[k]!.ns = noiseIndex(s.phone)
+    if (VOICED_FRIC.has(s.phone)) {
       const weak = s.phone === 'v' || s.phone === 'ð'
       for (let k = at(s.start); k < at(end); k++) {
         const f = frames[k]!
@@ -119,7 +147,7 @@ export function applyConsonants(frames: SynthFrame[], plan: SpeechPlan, voice: S
         if (weak) {
           f.av *= x.weakAv
           f.af *= x.weakAf
-        }
+        } else f.av = Math.min(1, f.av * x.sibAv)
       }
     }
   })

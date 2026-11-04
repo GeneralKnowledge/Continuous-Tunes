@@ -4,7 +4,10 @@ Each pair plays the same sentence as "1" and "2" in a per-item random order; the
 the one that sounds more like a person, or "same". Reveal gives the tally with the order resolved.
 Levels are matched (RMS), so loudness is no clue. Picks are kept in the browser while scoring.
 
-    python3 scripts/speech/ab-dirs.py <outDir> labelA=<dir> labelB=<dir> id[=text] [id[=text] ...] [--seed 1]
+    python3 scripts/speech/ab-dirs.py <outDir> labelA=<dir> labelB=<dir> id[=text] [id[=text] ...] [--seed 1] [--ask clear]
+
+--ask clear asks which version says the item's words more clearly (for consonant tests, with the
+text naming the word to listen for) instead of which sounds more human.
 
 Each id names <dir>/<id>.wav in both folders. The page is <outDir>/index.html, audio is
 <outDir>/<id>/<1|2>.wav.
@@ -27,6 +30,10 @@ def main():
     seed = 1
     if '--seed' in args:
         i = args.index('--seed'); seed = int(args[i + 1]); del args[i:i + 2]
+    ask = 'human'
+    if '--ask' in args:
+        i = args.index('--ask'); ask = args[i + 1]; del args[i:i + 2]
+    q = ASK[ask]
     out = args[0]
     (la, da), (lb, db) = [a.split('=', 1) for a in args[1:3]]
     items = [a.split('=', 1) if '=' in a else [a, ''] for a in args[3:]]
@@ -45,13 +52,20 @@ def main():
         sections.append(
             f'<section data-i="{name}"><h2>{html.escape(text) or name}</h2><div class="pair">'
             + ''.join(f'<div class="p"><span>{n}</span><audio controls preload="metadata" src="{name}/{n}.wav"></audio></div>' for n in (1, 2))
-            + '</div><div class="pick" role="group" aria-label="which sounds more like a person">'
-            + '<button type="button" data-v="1">1 sounds more human</button><button type="button" data-v="0">Same</button><button type="button" data-v="2">2 sounds more human</button></div></section>'
+            + f'</div><div class="pick" role="group" aria-label="{q["h1"]}">'
+            + f'<button type="button" data-v="1">1 {q["b"]}</button><button type="button" data-v="0">Same</button><button type="button" data-v="2">2 {q["b"]}</button></div></section>'
         )
-    page = TEMPLATE.replace('%SECTIONS%', '\n'.join(sections)).replace('%KEY%', json.dumps(key)).replace('%A%', la).replace('%B%', lb).replace('%N%', str(len(items)))
+    page = TEMPLATE.replace('%H1%', q['h1']).replace('%INTRO%', q['p']).replace('%SECTIONS%', '\n'.join(sections)).replace('%KEY%', json.dumps(key)).replace('%A%', la).replace('%B%', lb).replace('%N%', str(len(items)))
     open(os.path.join(out, 'index.html'), 'w').write(page)
     print(f'{len(items)} pairs ({la} vs {lb}) -> {out}/index.html')
 
+
+ASK = {
+    'human': {'h1': 'Which one sounds more like a person?', 'b': 'sounds more human',
+              'p': '%N% sentences, each spoken twice by the Strudel voice: two versions, in a random order every time, at the same loudness. Listen to both and pick the one that sounds more human, or Same if you can\'t tell. Press Reveal at the end and paste the result back.'},
+    'clear': {'h1': 'Which one says the word more clearly?', 'b': 'is clearer',
+              'p': '%N% items, each spoken twice by the Strudel voice: two versions, in a random order every time, at the same loudness. Each heading names the word to listen for and the word it could be mistaken for. Pick the version where the word is easier to tell apart, or Same if you can\'t tell. Press Reveal at the end and paste the result back.'},
+}
 
 TEMPLATE = '''<title>Strudel voice A/B</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -77,8 +91,8 @@ button.sel{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
 pre{white-space:pre-wrap;margin:0;font-size:.9rem}
 </style>
 <main>
-<h1>Which one sounds more like a person?</h1>
-<p>%N% sentences, each spoken twice by the Strudel voice: two versions, in a random order every time, at the same loudness. Listen to both and pick the one that sounds more human, or Same if you can't tell. Press Reveal at the end and paste the result back.</p>
+<h1>%H1%</h1>
+<p>%INTRO%</p>
 %SECTIONS%
 <button id="x" type="button">Reveal</button><pre id="r"></pre>
 </main>
