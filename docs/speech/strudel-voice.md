@@ -175,7 +175,7 @@ synthesis-based alignment plus a Praat pitch track):
   judged; minimises mean-removed semitone error over voiced frames.
 
 1086 prompts train the fit and the 52 from `arctic_b0490` are held out. The result is
-`src/speech/prosody-fitted.ts`, used by the opt-in voice `alder-fitted`. The fit makes accents
+`src/speech/prosody-fitted.ts`, used by Alder (see below). The fit makes accents
 smaller (1.7 semitones instead of 4) with early peaks, prenuclear accents as large as the nucleus,
 a steeper decline and a much deeper final fall (6.8 semitones), and slows speech by about 10%.
 
@@ -195,8 +195,11 @@ a steeper decline and a much deeper final fall (6.8 semitones), and slows speech
 The fitted contour moves more than the hand-set one (standard deviation 1.76 against 1.45
 semitones; the speaker's is 2.5), so the gain is not from flattening. Caveats: one speaker, who is
 Scottish, reading isolated sentences; alignment boundaries are 15–30 ms off, which limits the
-duration fit (log RMS error 0.44 → 0.42). A paired listening test decides whether `alder-fitted`
-becomes the default.
+duration fit (log RMS error 0.44 → 0.42). Paired listening test (Reuben, 16 held-out sentences, `scripts/speech/ab-dirs.py`): fitted 9,
+current 7, none the same. That is a lean, not a significant preference on its own, but it agrees
+with every measurement, so **Alder now uses the fitted prosody** (`prosody: 'fitted'`), and with it
+Copy Strudel. `alder-klatt` keeps the hand-set prosody for comparisons; `alder-m1` is unchanged
+(voice hash `e6959a8e`). Birch and Cedar keep their accent size relative to Alder.
 
 ## Research: what to borrow
 
