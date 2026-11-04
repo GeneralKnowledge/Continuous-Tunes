@@ -13,6 +13,10 @@ COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.jso
 COPY public ./public
 COPY src ./src
 
+# Neural voice for the Speech tab (Kokoro, Apache 2.0, about 150 MB with its runtime)
+COPY scripts/speech/neural/fetch-kokoro.sh ./scripts/speech/neural/
+RUN apk add --no-cache curl bzip2 && sh scripts/speech/neural/fetch-kokoro.sh
+
 RUN npm run build
 
 # ---- serve ----
