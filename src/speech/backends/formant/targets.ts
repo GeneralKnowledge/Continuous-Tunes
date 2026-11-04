@@ -49,6 +49,9 @@ export interface ConsonantTarget {
   fric: readonly FricBand[]
   /** Flat (bypass) part of the frication, 0–1 */
   bypass: number
+  /** High-pass corner of the frication noise, Hz: the front cavity passes little below its own
+   *  resonance, so sibilants have almost no low-frequency noise (Stevens 1998, ch. 8) */
+  fricHp: number
   /** Nasal zero frequency (the nasal pole sits at 270 Hz; zero = 270 means no nasal coupling) */
   nasalZero?: number
   /** Stops and affricates: closure then burst; burst shape uses fric/bypass */
@@ -100,6 +103,7 @@ interface CParts {
   af?: number
   fric?: readonly FricBand[]
   bypass?: number
+  fricHp?: number
   nasalZero?: number
   stop?: { burstMs: number; burstGain: number }
   followsVowel?: boolean
@@ -116,6 +120,7 @@ const C = (p: CParts): ConsonantTarget => ({
   af: p.af ?? 0,
   fric: p.fric ?? [],
   bypass: p.bypass ?? 0,
+  fricHp: p.fricHp ?? 0,
   ...(p.nasalZero !== undefined ? { nasalZero: p.nasalZero } : {}),
   ...(p.stop ? { stop: p.stop } : {}),
   ...(p.followsVowel ? { followsVowel: true } : {}),
@@ -129,36 +134,42 @@ const DENTAL = F(240, 1450, 2700, 60, 300, 400)
 const POSTALV = F(240, 2000, 2450, 60, 300, 400)
 const LABIODENTAL = F(240, 1100, 2150, 60, 300, 400)
 
-// Frication spectra (centre Hz, bandwidth Hz, gain)
-const S_SPECTRUM: FricBand[] = [[5200, 900, 0.55], [7200, 1400, 0.4], [3000, 500, 0.04]]
-const SH_SPECTRUM: FricBand[] = [[2600, 450, 1.4], [3600, 700, 0.8], [5500, 1500, 0.3]]
-const TH_SPECTRUM: FricBand[] = [[6500, 2500, 0.18], [3500, 1500, 0.06]]
-const F_SPECTRUM: FricBand[] = [[7000, 3000, 0.12], [1500, 900, 0.05]]
-const T_BURST: FricBand[] = [[4200, 1000, 0.8], [6000, 1800, 0.5]]
-const K_BURST: FricBand[] = [[1900, 300, 1.6], [3000, 600, 0.3]]
-const P_BURST: FricBand[] = [[900, 700, 0.4], [2500, 1500, 0.1]]
+// Frication spectra (centre Hz, bandwidth Hz, gain), for a white (flat) noise source. Shapes after
+// Jongman, Wayland & Wong (2000): /s/ peaks high (spectral mean ~6 kHz), /ʃ/ lower (~4 kHz) and
+// louder, /f θ/ diffuse and ~10 dB weaker; burst spectra after Stevens (1998): /t/ high and
+// diffuse-rising, /k/ compact at the following vowel's F2–F3, /p/ diffuse-falling.
+const S_SPECTRUM: FricBand[] = [[5600, 1400, 0.9], [7600, 1800, 0.55], [3200, 600, 0.06]]
+const SH_SPECTRUM: FricBand[] = [[2700, 700, 1.0], [4000, 1400, 0.9], [6000, 2000, 0.35]]
+const TH_SPECTRUM: FricBand[] = [[6000, 3500, 0.32], [3000, 1600, 0.12], [8000, 2000, 0.12]]
+const F_SPECTRUM: FricBand[] = [[5200, 4000, 0.3], [2000, 1500, 0.1], [8000, 2500, 0.1]]
+const T_BURST: FricBand[] = [[4300, 1500, 1.0], [6200, 2000, 0.8], [2800, 800, 0.15]]
+const K_BURST: FricBand[] = [[1900, 600, 1.6], [3000, 900, 0.45], [5000, 2000, 0.1]]
+const P_BURST: FricBand[] = [[900, 900, 0.6], [2200, 1500, 0.25], [4000, 2500, 0.08]]
 
+// Voiced obstruents (Stevens 1998): a weak, low-pass "voice bar" during stop closures; voiced
+// fricatives keep real frication with lower voicing so they stay fricatives rather than becoming
+// vowel-like murmurs (M1 had /v ð/ only 6 dB under vowels and heard as nasals or nothing).
 export const CONSONANTS: Record<string, ConsonantTarget> = {
-  p: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, fric: P_BURST, bypass: 0.25, stop: { burstMs: 8, burstGain: 0.55 } }),
-  b: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, av: 0.12, fric: P_BURST, bypass: 0.2, stop: { burstMs: 6, burstGain: 0.35 } }),
-  t: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, fric: T_BURST, bypass: 0.1, stop: { burstMs: 12, burstGain: 0.75 } }),
-  d: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, av: 0.12, fric: T_BURST, bypass: 0.08, stop: { burstMs: 9, burstGain: 0.5 } }),
-  k: C({ formants: VELAR, slope: 0.7, transitionMs: 55, fric: K_BURST, bypass: 0.05, stop: { burstMs: 25, burstGain: 1.2 } }),
-  g: C({ formants: VELAR, slope: 0.7, transitionMs: 55, av: 0.12, fric: K_BURST, bypass: 0.05, stop: { burstMs: 16, burstGain: 0.7 } }),
-  tʃ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, af: 0.8, fric: SH_SPECTRUM, stop: { burstMs: 55, burstGain: 0.85 } }),
-  dʒ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, av: 0.25, af: 0.5, fric: SH_SPECTRUM, stop: { burstMs: 45, burstGain: 0.6 } }),
-  f: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, af: 0.7, fric: F_SPECTRUM, bypass: 0.12 }),
-  v: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, av: 0.45, af: 0.4, fric: F_SPECTRUM, bypass: 0.08 }),
-  θ: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, af: 0.7, fric: TH_SPECTRUM, bypass: 0.1 }),
-  ð: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, av: 0.5, af: 0.35, fric: TH_SPECTRUM, bypass: 0.05 }),
-  s: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, af: 1, fric: S_SPECTRUM }),
-  z: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, av: 0.4, af: 0.6, fric: S_SPECTRUM }),
-  ʃ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, af: 1, fric: SH_SPECTRUM }),
-  ʒ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, av: 0.4, af: 0.6, fric: SH_SPECTRUM }),
-  h: C({ formants: SCHWA, slope: 1, transitionMs: 20, ah: 0.55, followsVowel: true }),
-  m: C({ formants: F(480, 1270, 2130, 40, 200, 200), locus: LABIAL, slope: 0.75, transitionMs: 35, av: 0.5, nasalZero: 750 }),
-  n: C({ formants: F(480, 1340, 2470, 40, 300, 300), locus: ALVEOLAR, slope: 0.45, transitionMs: 35, av: 0.45, nasalZero: 1450 }),
-  ŋ: C({ formants: F(480, 2000, 2300, 40, 300, 300), locus: VELAR, slope: 0.8, transitionMs: 40, av: 0.45, nasalZero: 2500 }),
+  p: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, fric: P_BURST, bypass: 0.3, stop: { burstMs: 8, burstGain: 0.8 } }),
+  b: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, av: 0.12, fric: P_BURST, bypass: 0.25, stop: { burstMs: 6, burstGain: 0.55 } }),
+  t: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, fric: T_BURST, bypass: 0.15, stop: { burstMs: 12, burstGain: 0.6 }, fricHp: 2000 }),
+  d: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, av: 0.12, fric: T_BURST, bypass: 0.1, stop: { burstMs: 8, burstGain: 0.45 }, fricHp: 2000 }),
+  k: C({ formants: VELAR, slope: 0.7, transitionMs: 55, fric: K_BURST, bypass: 0.05, stop: { burstMs: 20, burstGain: 0.8 }, fricHp: 900 }),
+  g: C({ formants: VELAR, slope: 0.7, transitionMs: 55, av: 0.12, fric: K_BURST, bypass: 0.05, stop: { burstMs: 14, burstGain: 0.75 }, fricHp: 900 }),
+  tʃ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, af: 1, fric: SH_SPECTRUM, stop: { burstMs: 60, burstGain: 1.0 }, fricHp: 1600 }),
+  dʒ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, av: 0.2, af: 0.7, fric: SH_SPECTRUM, stop: { burstMs: 45, burstGain: 0.7 }, fricHp: 1600 }),
+  f: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, af: 0.5, fric: F_SPECTRUM, bypass: 0.12, fricHp: 900 }),
+  v: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, av: 0.22, af: 0.9, fric: F_SPECTRUM, bypass: 0.1, fricHp: 900 }),
+  θ: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, af: 0.5, fric: TH_SPECTRUM, bypass: 0.12, fricHp: 900 }),
+  ð: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, av: 0.22, af: 0.8, fric: TH_SPECTRUM, bypass: 0.08, fricHp: 900 }),
+  s: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, af: 1, fric: S_SPECTRUM, fricHp: 3000 }),
+  z: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, av: 0.22, af: 0.85, fric: S_SPECTRUM, fricHp: 3000 }),
+  ʃ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, af: 1, fric: SH_SPECTRUM, fricHp: 1700 }),
+  ʒ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, av: 0.22, af: 0.85, fric: SH_SPECTRUM, fricHp: 1700 }),
+  h: C({ formants: SCHWA, slope: 1, transitionMs: 20, ah: 0.45, followsVowel: true }),
+  m: C({ formants: F(480, 1270, 2130, 40, 150, 200), locus: LABIAL, slope: 0.75, transitionMs: 35, av: 0.5, nasalZero: 450 }),
+  n: C({ formants: F(480, 1340, 2470, 40, 200, 200), locus: ALVEOLAR, slope: 0.45, transitionMs: 35, av: 0.45, nasalZero: 450 }),
+  ŋ: C({ formants: F(480, 2000, 2300, 40, 200, 200), locus: VELAR, slope: 0.8, transitionMs: 40, av: 0.45, nasalZero: 450 }),
   l: C({ formants: F(360, 1050, 2800, 60, 120, 200), slope: 0.35, transitionMs: 55, av: 0.75 }),
   r: C({ formants: F(330, 1100, 1550, 70, 100, 120), slope: 0.3, transitionMs: 65, av: 0.75 }),
   w: C({ formants: F(290, 650, 2150, 50, 80, 150), slope: 0.25, transitionMs: 75, av: 0.75 }),

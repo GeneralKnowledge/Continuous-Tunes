@@ -1,28 +1,65 @@
 /**
  * Render the speech benchmark and measure it.
  *
- *   npx tsx scripts/speech/benchmark.ts <outDir> [voiceId,voiceId…]
+ *   npx tsx scripts/speech/benchmark.ts <outDir> [voiceId|voice.json,…] [--set core|diagnostic|all] [--backend id]
+ *
+ * --seed n changes the noise and jitter of every clip (default 1): rerun with a few seeds to see how
+ * much of a score difference is just chance.
  *
  * Writes <outDir>/<voice>/<id>.wav, <outDir>/report.json, <outDir>/report.md and a blind
  * listening page <outDir>/listening.html (type what you hear, then reveal the text).
- * If <outDir>/asr.json exists (from scripts/speech/asr_whisper.py), word error rates are added.
+ * A voice can be a preset id or a JSON file holding a SpeechVoice (an experiment's genome).
+ * If <outDir>/asr*.json exist (from scripts/speech/asr_whisper.py; asr.json = Whisper base.en,
+ * asr.small.json = small.en, …), word error rates and diagnostic scores are added per model.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { encodeWav, getVoicePreset, speak, withControls } from '../../src/speech'
-import { BENCHMARK } from '../../src/speech/benchmark'
-import { audioHash, audioMetrics, coverage, g2pAccuracy, planMetrics, wordErrorRate } from '../../src/speech/metrics'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { encodeWav, getVoicePreset, speak, validateVoice, withControls, type SpeechVoice } from '../../src/speech'
+import { BENCHMARK_SETS, scoreDiagnostic, type BenchmarkSet } from '../../src/speech/benchmark'
+import {
+  audioHash,
+  audioMetrics,
+  coverage,
+  g2pAccuracy,
+  normalisedWords,
+  planMetrics,
+  segmentAcoustics,
+  summarisePhoneAcoustics,
+  voiceHash,
+  wordErrorRate,
+  type SegmentAcoustics,
+} from '../../src/speech/metrics'
 import { formatPronunciation } from '../../src/speech/phonemes'
 import { loadNodeLexicon } from './lexicon-node'
 import { createRequire } from 'node:module'
 
-const outDir = process.argv[2] ?? 'speech-benchmark'
-const voiceIds = (process.argv[3] ?? 'alder,cedar').split(',')
+const args = process.argv.slice(2)
+const flag = (name: string) => {
+  const i = args.indexOf(`--${name}`)
+  return i >= 0 ? args.splice(i, 2)[1] : undefined
+}
+const setName = (flag('set') ?? 'core') as BenchmarkSet
+const backendOverride = flag('backend')
+const seed = Number(flag('seed') ?? 1)
+const BENCHMARK = BENCHMARK_SETS[setName]
+if (!BENCHMARK) throw new Error(`unknown set ${setName}`)
+const outDir = args[0] ?? 'speech-benchmark'
+const voiceSpecs = (args[1] ?? 'alder').split(',')
+const voices: SpeechVoice[] = voiceSpecs.map((spec) =>
+  spec.endsWith('.json') ? validateVoice(JSON.parse(readFileSync(spec, 'utf8')) as SpeechVoice).voice : getVoicePreset(spec),
+)
+const voiceIds = voices.map((v, i) => (voiceSpecs[i]!.endsWith('.json') ? basename(voiceSpecs[i]!, '.json') : v.id))
 const lexicon = loadNodeLexicon()
 mkdirSync(outDir, { recursive: true })
 
-const asrPath = join(outDir, 'asr.json')
-const asr: Record<string, string> = existsSync(asrPath) ? JSON.parse(readFileSync(asrPath, 'utf8')) : {}
+// asr.json is Whisper base.en (the M1 setting); asr.<model>.json are other recognisers
+const asrModels: Record<string, Record<string, string>> = {}
+for (const f of readdirSync(outDir)) {
+  const m = /^asr(?:\.([\w-]+))?\.json$/.exec(f)
+  if (m) asrModels[m[1] ?? 'base'] = JSON.parse(readFileSync(join(outDir, f), 'utf8'))
+}
+const asr = asrModels.base ?? {}
+const modelNames = Object.keys(asrModels).sort()
 
 interface Row {
   voice: string
@@ -38,21 +75,45 @@ interface Row {
   audio: ReturnType<typeof audioMetrics>
   asr?: string
   wer?: number
+  /** per recogniser: transcript, WER and (diagnostic items) what was heard in the slot */
+  byModel: Record<string, { text: string; wer: number; heard?: string; correct?: boolean; foil?: boolean }>
+  contrast?: string
+  target?: string
+  renderMs: number
 }
 
 const rows: Row[] = []
 const utterances = []
-for (const voiceId of voiceIds) {
+const acoustics: Record<string, SegmentAcoustics[]> = {}
+let audioSeconds = 0
+let renderSeconds = 0
+for (const [vi, voiceId] of voiceIds.entries()) {
   mkdirSync(join(outDir, voiceId), { recursive: true })
+  acoustics[voiceId] = []
   for (const item of BENCHMARK) {
-    const voice = withControls(getVoicePreset(voiceId), { rate: item.rate ?? 1 })
-    const r = speak(item.text, voice, { lexicon })
-    const again = speak(item.text, voice, { lexicon })
+    const voice = withControls(voices[vi]!, { rate: item.rate ?? 1 })
+    const opts = { lexicon, seed, ...(backendOverride ? { backend: backendOverride } : {}) }
+    const t0 = performance.now()
+    const r = speak(item.text, voice, opts)
+    const renderMs = performance.now() - t0
+    audioSeconds += r.samples.length / r.sampleRate
+    renderSeconds += renderMs / 1000
+    const again = speak(item.text, voice, opts)
+    acoustics[voiceId]!.push(...segmentAcoustics(r.samples, r.sampleRate, r.plan))
     const file = `${voiceId}/${item.id}.wav`
     writeFileSync(join(outDir, file), encodeWav(r.samples, r.sampleRate))
     if (voiceId === voiceIds[0]) utterances.push(r.utterance)
     const hyp = asr[file]
+    const byModel: Row['byModel'] = {}
+    for (const m of modelNames) {
+      const text = asrModels[m]![file]
+      if (text === undefined) continue
+      byModel[m] = { text, wer: wordErrorRate(item.text, text), ...(item.target ? scoreDiagnostic(item, normalisedWords(text)) : {}) }
+    }
     rows.push({
+      byModel,
+      renderMs,
+      ...(item.contrast ? { contrast: item.contrast, target: item.target } : {}),
       voice: voiceId,
       id: item.id,
       category: item.category,
@@ -101,18 +162,32 @@ const summary = voiceIds.map((v) => {
     f0ErrorSemitones: mean(rs.map((r) => r.audio.f0ErrorSemitones)),
     yesNoFinalSlope: mean(rs.filter((r) => r.id === 'q-02' || r.id === 'q-04').map((r) => r.plan.finalSlopeSemitones)),
     statementFinalSlope: mean(rs.filter((r) => r.id === 'q-01' || r.id === 'q-05').map((r) => r.plan.finalSlopeSemitones)),
-    wer: withAsr.length ? mean(withAsr.map((r) => r.wer!)) : null,
+    wer: withAsr.some((r) => r.category !== 'diagnostic') ? mean(withAsr.filter((r) => r.category !== 'diagnostic').map((r) => r.wer!)) : null,
     werByCategory: byCat,
+    // WER over the core benchmark only (the M1 item set), so it stays comparable across runs
+    werByModel: Object.fromEntries(modelNames.map((m) => {
+      const xs = rs.filter((r) => r.byModel[m] && r.category !== 'diagnostic').map((r) => r.byModel[m]!.wer)
+      return [m, xs.length ? mean(xs) : null]
+    })),
+    diagnosticByModel: Object.fromEntries(modelNames.map((m) => {
+      const ds = rs.filter((r) => r.contrast && r.byModel[m])
+      const byContrast: Record<string, number> = {}
+      for (const c of new Set(ds.map((r) => r.contrast!))) byContrast[c] = mean(ds.filter((r) => r.contrast === c).map((r) => (r.byModel[m]!.correct ? 1 : 0)))
+      return [m, { accuracy: ds.length ? mean(ds.map((r) => (r.byModel[m]!.correct ? 1 : 0))) : null, byContrast }]
+    })),
+    phoneAcoustics: summarisePhoneAcoustics(acoustics[v] ?? []),
+    voiceHash: voiceHash(voices[voiceIds.indexOf(v)]!),
   }
 })
+const realTimeFactor = renderSeconds / Math.max(1e-9, audioSeconds)
 
-writeFileSync(join(outDir, 'report.json'), JSON.stringify({ generated: new Date().toISOString(), summary, coverage: cov, g2p, rows }, null, 2))
+writeFileSync(join(outDir, 'report.json'), JSON.stringify({ generated: new Date().toISOString(), seed, set: setName, backend: backendOverride ?? null, voices, realTimeFactor, summary, coverage: cov, g2p, rows }, null, 2))
 
 const f = (x: number, d = 2) => x.toFixed(d)
 const md: string[] = [
   '# Speech benchmark',
   '',
-  `${BENCHMARK.length} items × ${voiceIds.length} voices (${voiceIds.join(', ')}). Formant backend, 22.05 kHz.`,
+  `Set \`${setName}\`: ${BENCHMARK.length} items × ${voiceIds.length} voices (${voiceIds.join(', ')}). Backend ${backendOverride ?? voices.map((v) => v.backend).join('/')}, 22.05 kHz. Render real-time factor ${f(realTimeFactor, 3)} (one Node thread). Voice hashes: ${summary.map((s) => `${s.voice} ${s.voiceHash}`).join(', ')}.`,
   '',
   '## Summary',
   '',
@@ -126,6 +201,27 @@ const md: string[] = [
     ? ['### ASR word error rate by category (auxiliary, not ground truth)', '', '| category | ' + voiceIds.join(' | ') + ' |', '|---|' + voiceIds.map(() => '---|').join(''),
        ...Object.keys(summary[0]!.werByCategory).map((c) => `| ${c} | ${summary.map((s) => f((s.werByCategory[c] ?? 0) * 100, 0) + '%').join(' | ')} |`), '']
     : []),
+  ...(modelNames.length
+    ? ['### By recogniser', '', 'WER over the core items (the M1 set); diagnostic = share of diagnostic target words heard (closed set). base/small are Whisper (strong language model); citrinet (CTC) and zipformer (transducer) lean much less on language and so track the acoustics more closely.', '', '| voice | ' + modelNames.map((m) => `WER ${m}`).join(' | ') + ' | mean WER | ' + modelNames.map((m) => `diagnostic ${m}`).join(' | ') + ' | mean diagnostic |',
+       '|---|' + modelNames.map(() => '---|').join('').repeat(2) + '---|---|',
+       ...summary.map((s) => {
+         const w = modelNames.map((m) => s.werByModel[m]).filter((x): x is number => x != null)
+         const d = modelNames.map((m) => s.diagnosticByModel[m]!.accuracy).filter((x): x is number => x != null)
+         return `| ${s.voice} | ${modelNames.map((m) => (s.werByModel[m] == null ? '–' : f(s.werByModel[m]! * 100, 0) + '%')).join(' | ')} | ${w.length ? f(mean(w) * 100, 1) + '%' : '–'} | ${modelNames.map((m) => (s.diagnosticByModel[m]!.accuracy == null ? '–' : f(s.diagnosticByModel[m]!.accuracy! * 100, 0) + '%')).join(' | ')} | ${d.length ? f(mean(d) * 100, 1) + '%' : '–'} |`
+       }), '']
+    : []),
+  ...(rows.some((r) => r.contrast) && modelNames.length
+    ? ['### Diagnostic contrasts (share of target words heard correctly)', '',
+       '| contrast | ' + summary.flatMap((s) => modelNames.map((m) => `${s.voice} ${m}`)).join(' | ') + ' |',
+       '|---|' + summary.flatMap(() => modelNames.map(() => '---|')).join(''),
+       ...[...new Set(rows.filter((r) => r.contrast).map((r) => r.contrast!))].map((c) => `| ${c} | ${summary.flatMap((s) => modelNames.map((m) => f((s.diagnosticByModel[m]!.byContrast[c] ?? 0) * 100, 0) + '%')).join(' | ')} |`), '']
+    : []),
+  '## Per-phone acoustics',
+  '',
+  'Level relative to stressed vowels; centroid of the segment centre; low = share of energy under 500 Hz; release = 30 ms around a stop release. ⚠ marks values outside the rough natural ranges in `NATURAL_RANGES` (metrics.ts).',
+  '',
+  ...summary.flatMap((s) => [`**${s.voice}**`, '', '| phone | n | level dB | centroid Hz | low | release dB | release centroid | |', '|---|---|---|---|---|---|---|---|',
+    ...s.phoneAcoustics.map((p) => `| ${p.phone} | ${p.n} | ${f(p.levelDb, 1)} | ${f(p.centroid, 0)} | ${f(p.low, 2)} | ${p.releaseLevelDb === undefined ? '' : f(p.releaseLevelDb, 1)} | ${p.releaseCentroid === undefined ? '' : f(p.releaseCentroid, 0)} | ${p.outside.length ? '⚠ ' + p.outside.join(', ') : ''} |`), '']),
   '## Coverage',
   '',
   `Phonemes used: ${cov.phonemesUsed.length}/${cov.phonemesUsed.length + cov.phonemesMissing.length}${cov.phonemesMissing.length ? ` (missing: ${cov.phonemesMissing.join(' ')})` : ''}. Distinct diphones: ${cov.diphones}.`,
@@ -136,9 +232,9 @@ const md: string[] = [
   '',
   '## Items',
   '',
-  '| voice | id | text | s | ASR |',
-  '|---|---|---|---|---|',
-  ...rows.map((r) => `| ${r.voice} | ${r.id} | ${r.text.replace(/\|/g, '/')} | ${f(r.duration, 1)} | ${r.asr === undefined ? '' : `${r.asr.replace(/\|/g, '/')} (${f(r.wer! * 100, 0)}%)`} |`),
+  '| voice | id | text | s | ' + (modelNames.length ? modelNames.join(' | ') : 'ASR') + ' |',
+  '|---|---|---|---|' + (modelNames.length ? modelNames.map(() => '---|').join('') : '---|'),
+  ...rows.map((r) => `| ${r.voice} | ${r.id} | ${r.text.replace(/\|/g, '/')} | ${f(r.duration, 1)} | ${modelNames.length ? modelNames.map((m) => { const b = r.byModel[m]; return b ? `${b.text.replace(/\|/g, '/')} (${b.heard !== undefined ? (b.correct ? '✓' : '✗ ' + b.heard) : f(b.wer * 100, 0) + '%'})` : '' }).join(' | ') : ''} |`),
   '',
 ]
 writeFileSync(join(outDir, 'report.md'), md.join('\n'))
@@ -156,5 +252,5 @@ for (const b of document.querySelectorAll('.rev')) b.onclick = () => b.parentEle
 document.getElementById('export').onclick = () => { const a = {}; for (const d of document.querySelectorAll('.item')) a[d.dataset.file] = d.querySelector('input').value; document.getElementById('out').textContent = JSON.stringify(a, null, 1) }
 </script></body></html>`
 writeFileSync(join(outDir, 'listening.html'), html)
-console.log(md.slice(0, 14).join('\n'))
+console.log(md.slice(0, md.indexOf('## Per-phone acoustics')).join('\n'))
 console.log(`\nwrote ${rows.length} clips, report.md, report.json, listening.html to ${outDir}`)

@@ -37,10 +37,14 @@ export interface VoiceSource {
   jitter: number
   /** Cycle-to-cycle amplitude perturbation, fraction */
   shimmer: number
-  /** Open quotient of the glottal pulse (0.4 pressed – 0.8 lax) */
+  /** Open quotient of the KLGLOTT88 pulse (0.4 pressed – 0.8 lax); used by the formant-m1 backend */
   openQuotient: number
   /** Extra low-pass on the source: 0 bright – 1 soft */
   spectralTilt: number
+  /** LF voice quality Rd (Fant 1995): ~0.6 pressed, ~1.0 modal, ~1.8 lax, 2.5 breathy */
+  rd: number
+  /** Slow f0 drift (Klatt's flutter), 0–1 */
+  flutter: number
 }
 
 export interface VoiceTract {
@@ -93,6 +97,8 @@ export const VOICE_RANGES = {
     shimmer: [0, 0.15],
     openQuotient: [0.4, 0.8],
     spectralTilt: [0, 1],
+    rd: [0.5, 2.5],
+    flutter: [0, 1],
   },
   tract: { formantScale: [0.85, 1.3], bandwidthScale: [0.6, 1.8], nasality: [0, 1] },
   articulation: {
@@ -110,9 +116,21 @@ export const DEFAULT_VOICE: SpeechVoice = {
   backend: 'formant',
   pitch: { baseHz: 118, accentSemitones: 4, declination: 1.2, questionRise: 6, finalFall: 4 },
   timing: { rate: 1, pauseScale: 1, stressLengthening: 1 },
-  source: { breathiness: 0.08, jitter: 0.006, shimmer: 0.03, openQuotient: 0.55, spectralTilt: 0.25 },
+  source: { breathiness: 0.08, jitter: 0.006, shimmer: 0.03, openQuotient: 0.55, spectralTilt: 0, rd: 0.9, flutter: 0.3 },
   tract: { formantScale: 1, bandwidthScale: 1, nasality: 0.4 },
   articulation: { consonantStrength: 1, transitionMs: 50, coarticulation: 0.4, aspirationMs: 55 },
+}
+
+/**
+ * Alder exactly as it was in M1 (PR #14), for the frozen `formant-m1` backend: rendering this voice
+ * with that backend reproduces the M1 baseline bit for bit.
+ */
+export const M1_VOICE: SpeechVoice = {
+  ...DEFAULT_VOICE,
+  id: 'alder-m1',
+  name: 'Alder (M1 baseline)',
+  backend: 'formant-m1',
+  source: { ...DEFAULT_VOICE.source, spectralTilt: 0.25 },
 }
 
 const preset = (base: SpeechVoice, patch: {
@@ -141,25 +159,25 @@ export const VOICE_PRESETS: readonly SpeechVoice[] = [
     name: 'Birch (middle)',
     pitch: { baseHz: 165, accentSemitones: 5 },
     tract: { formantScale: 1.1 },
-    source: { openQuotient: 0.6, breathiness: 0.15 },
+    source: { openQuotient: 0.6, breathiness: 0.15, rd: 1.3 },
   }),
   preset(DEFAULT_VOICE, {
     id: 'cedar',
     name: 'Cedar (high, breathy)',
     pitch: { baseHz: 215, accentSemitones: 5.5, questionRise: 7 },
     tract: { formantScale: 1.17, bandwidthScale: 1.1 },
-    source: { breathiness: 0.3, openQuotient: 0.68, spectralTilt: 0.45 },
+    source: { breathiness: 0.3, openQuotient: 0.68, spectralTilt: 0.2, rd: 1.8 },
   }),
   preset(DEFAULT_VOICE, {
     id: 'monotone',
     name: 'Monotone (diagnostic)',
     pitch: { accentSemitones: 0, declination: 0, questionRise: 0, finalFall: 0 },
-    source: { jitter: 0, shimmer: 0, breathiness: 0 },
+    source: { jitter: 0, shimmer: 0, breathiness: 0, flutter: 0 },
   }),
 ]
 
 export function getVoicePreset(id: string): SpeechVoice {
-  return VOICE_PRESETS.find((v) => v.id === id) ?? DEFAULT_VOICE
+  return [...VOICE_PRESETS, M1_VOICE].find((v) => v.id === id) ?? DEFAULT_VOICE
 }
 
 export interface VoiceValidation {
