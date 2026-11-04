@@ -113,6 +113,44 @@ python3 scripts/speech/asr_whisper.py <dir> <models…>
 python3 scripts/speech/voice-eval.py items.json <dir>
 ```
 
+### Round 2 experiments (after V1)
+
+**V2 waveguide** (`tract-processor.ts`, `articulation.ts`, engine `tract`). A Kelly–Lochbaum tract
+after Pink Trombone (44 sections, 28-section nose, tract rate 88.2 kHz scaled by the voice's
+formant scale) driven by an articulatory planner: a vowel substrate of four mode weights fitted to
+our formant targets, plus up to three overlapping consonant gestures, lip rounding, velum and
+turbulence channels. Vowel formants measured with Praat land on their targets. Consonants do not:
+
+| Variant (quick set, 41 items) | Whisper small | Zipformer |
+|---|---|---|
+| V1 instrument | 19.4% | 45.7% |
+| Waveguide, first working version | 55.9% | 68.3% |
+| + band-passed aspiration, low-passed turbulence (/s/ peak 11.9 → 7.5 kHz) | 55.4% | 69.4% |
+| + wall radiation for a voice bar | worse (75% mean over four) | |
+| + places and widths fitted to V1's locus equations (about 1 Bark error) | worse (93%) | |
+
+On the 80-item corpus it averages about 79% WER, against 33.5% for V1. Its weaknesses are stop
+bursts, the voice bar during closures and fricative spectra; fixing them means modelling pressure
+build-up, which Pink Trombone does not do either. It stays in the code as an experiment (Copy
+Strudel uses V1) and the decision was to improve V1 first.
+
+**Consonant voicing cues on V1** (voice bar during voiced closures, longer bursts, voicing offset
+before voiceless stops). All neutral within noise. The most frequent error ("say X" heard as
+"save …") moved with the recogniser, not with the acoustics, so we read it as language-model bias
+and removed the experiment.
+
+**Expression layer** (`expression.ts`, option `expression`, off by default). It edits V1's frames
+from the plan's linguistic structure: tenser and 1.5 dB louder accented vowels, laxer and 2.5 dB
+softer unstressed ones, a breathy, 4 dB quieter relaxation at phrase ends, and microprosody (f0
+raised after voiceless obstruents and dipped in voiced ones). WER moves from 28.7% to 29.6% on the
+benchmark, within noise except fricative voicing on the diagnostic words (19% → 31% errors). WER
+is not a naturalness measure, so the decision waits for the listening test.
+
+**Blind listening test**: the 8 held-out ARCTIC sentences from earlier rounds, spoken by PR #19
+patterns, V1, V1 with expression and the waveguide, plus the real recording as a hidden reference,
+scored 0–100 for naturalness (`scripts/speech/listen-multi.py`; page and audio in project files,
+`recordings/speech/strudel-voice/listening-test/`). Scores to follow.
+
 ## Research: what to borrow
 
 The question for each source was what can run inside a worklet, be driven by our planner, and
@@ -136,7 +174,7 @@ measurably help.
 |---|---|---|
 | V0 ✓ | Fixed corpus, baselines, renderer, scorer | Numbers above |
 | V1 ✓ | Continuous instrument (LF source + formant tract) | 54.4% → 28.7% WER |
-| V2 | Articulatory planner: Story-style area functions, gestures with target approximation. Two tracts compared in the worklet: Kelly–Lochbaum waveguide, and formants computed from the area function | Corpus WER, blind A/B, CPU |
+| V2 (experiment) | Articulatory planner: Story-style area functions, gestures with target approximation. Two tracts compared in the worklet: Kelly–Lochbaum waveguide, and formants computed from the area function | Corpus WER, blind A/B, CPU |
 | V3 | Consonants from the tract: closure, pressure build-up and release burst, turbulence at the constriction, voice bar, VOT | Consonant and diagnostic scores |
 | V4 | Prosody: qTA pitch targets, stress affecting duration, Rd and articulation; question and statement contours | Blind A/B, F0 against recordings |
 | V5 | Optimisation against recordings (mel and formant distance, evolutionary search) | Held-out ARCTIC prompts |

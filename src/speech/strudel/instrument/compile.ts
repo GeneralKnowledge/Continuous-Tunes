@@ -15,6 +15,7 @@ import type { SynthFrame } from '../../backends/formant/klatt'
 import { voiceProcessorModule } from './processor'
 import { tractProcessorModule } from './tract-processor'
 import { buildArticulation, type ArticFrame } from './articulation'
+import { applyExpression, DEFAULT_EXPRESSION, type ExpressionSettings } from './expression'
 
 const FRAME = 0.005
 
@@ -58,6 +59,9 @@ export interface StrudelVoiceOptions {
   /** 'formant': Klatt-style resonators driven by formant tracks (V1); 'tract': a Kelly-Lochbaum
    *  waveguide driven by articulation (V2) */
   engine?: 'formant' | 'tract'
+  /** voice quality, loudness and micro-pitch from stress and phrasing (expression.ts); off by default
+   *  until the listening test decides, pass {} for the defaults */
+  expression?: Partial<ExpressionSettings>
   /** silence after the utterance before the pattern repeats, seconds (default 0.6) */
   tail?: number
   /** output level inside Strudel, before Strudel's own gain (default 6) */
@@ -170,7 +174,13 @@ export function compileStrudelVoice(plan: SpeechPlan, voice: SpeechVoice, opts: 
   const engine = opts.engine ?? 'formant'
   const tail = opts.tail ?? 0.6
   const seconds = plan.duration + tail
-  const track = engine === 'tract' ? encodeArticulation(buildArticulation(plan, voice)) : encodeTrack(buildFrames(plan, voice, 48000), voice.source.rd)
+  let track: string
+  if (engine === 'tract') track = encodeArticulation(buildArticulation(plan, voice))
+  else {
+    const frames = buildFrames(plan, voice, 48000)
+    if (opts.expression) applyExpression(frames, plan, voice.source.rd, FRAME, { ...DEFAULT_EXPRESSION, ...opts.expression })
+    track = encodeTrack(frames, voice.source.rd)
+  }
   const src0 = processorSource('NAME', engine)
   const name = `ct-${engine}-${hash(src0)}`
   const src = processorSource(name, engine)

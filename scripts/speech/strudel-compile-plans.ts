@@ -24,7 +24,7 @@ const items = readdirSync(plansDir)
   .map((f) => {
     const p = JSON.parse(readFileSync(join(plansDir, f), 'utf8')) as SpeechPlan & { id: string; text: string }
     if (instrument) {
-      const r = compileStrudelVoice(p, voice, { text: p.text, tail: 0.3, engine: process.env.STRUDEL_ENGINE === 'tract' ? 'tract' : 'formant' })
+      const r = compileStrudelVoice(p, voice, { text: p.text, tail: 0.3, engine: process.env.STRUDEL_ENGINE === 'tract' ? 'tract' : 'formant', expression: process.env.STRUDEL_EXPRESSION ? JSON.parse(process.env.STRUDEL_EXPRESSION) : undefined })
       return { id: p.id, code: r.code, seconds: r.seconds, speech: r.seconds - 0.3, events: 1 }
     }
     const r = compileStrudelSpeech(p, voice, { text: p.text, step, tail: 0.3, tune: process.env.STRUDEL_TUNE ? JSON.parse(process.env.STRUDEL_TUNE) : undefined })
