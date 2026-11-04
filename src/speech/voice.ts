@@ -45,6 +45,9 @@ export interface VoiceSource {
   rd: number
   /** Slow f0 drift (Klatt's flutter), 0–1 */
   flutter: number
+  /** Recorded excitation: 0 = LF model only … 1 = natural glottal pulses only (formant backend;
+   *  needs a pulse set loaded with setExcitationPulses, otherwise ignored) */
+  excitation: number
 }
 
 export interface VoiceTract {
@@ -102,6 +105,7 @@ export const VOICE_RANGES = {
     spectralTilt: [0, 1],
     rd: [0.5, 2.5],
     flutter: [0, 1],
+    excitation: [0, 1],
   },
   tract: { formantScale: [0.85, 1.3], bandwidthScale: [0.6, 1.8], nasality: [0, 1] },
   articulation: {
@@ -119,7 +123,7 @@ export const DEFAULT_VOICE: SpeechVoice = {
   backend: 'formant',
   pitch: { baseHz: 118, accentSemitones: 4, declination: 1.2, questionRise: 6, finalFall: 4 },
   timing: { rate: 1, pauseScale: 1, stressLengthening: 1 },
-  source: { breathiness: 0.08, jitter: 0.006, shimmer: 0.03, openQuotient: 0.55, spectralTilt: 0, rd: 0.9, flutter: 0.3 },
+  source: { breathiness: 0.08, jitter: 0.006, shimmer: 0.03, openQuotient: 0.55, spectralTilt: 0, rd: 0.9, flutter: 0.3, excitation: 0 },
   tract: { formantScale: 1, bandwidthScale: 1, nasality: 0.4 },
   articulation: { consonantStrength: 1, transitionMs: 50, coarticulation: 0.4, aspirationMs: 55 },
 }

@@ -65,6 +65,25 @@ export interface SourceSettings {
   spectralTilt: number
   /** Klatt's flutter: slow f0 drift, 0–1 (1 ≈ ±1.5% of f0) */
   flutter: number
+  /** Share of recorded excitation (natural glottal pulses) mixed with the LF pulse, 0–1 */
+  excitation?: number
+}
+
+/**
+ * Natural excitation pulses (one period each, resampled to a fixed length, unit RMS), extracted
+ * from recorded vowels by scripts/speech/corpus/extract-pulses.py. Residual-excited synthesis:
+ * the formant filters stay procedural, the source carries a real voice's fine structure.
+ */
+let EXCITATION: Float32Array[] | null = null
+/** Per pulse: position (0–1) of its main negative peak, the glottal closure. */
+let EXCITATION_PEAK: number[] = []
+export function setExcitationPulses(pulses: readonly ArrayLike<number>[] | null): void {
+  EXCITATION = pulses && pulses.length ? pulses.map((p) => Float32Array.from(p)) : null
+  EXCITATION_PEAK = (EXCITATION ?? []).map((p) => {
+    let k = 0
+    for (let i = 1; i < p.length; i++) if (p[i]! < p[k]!) k = i
+    return k / p.length
+  })
 }
 
 /**
@@ -241,6 +260,15 @@ const VOICE_GAIN = 0.026
 // measured compromise (see docs/speech/m2-audit-and-plan.md).
 const HPC = 0.6
 const ASPIRATION_GAIN = 0.004
+// RMS of the LF flow derivative over one period at Rd 0.9 (numerically, 1000 points), so recorded
+// pulses (unit RMS) enter at the same level
+const LF_RMS = (() => {
+  const p = new LfPulse()
+  p.setRd(0.9)
+  let s = 0
+  for (let i = 0; i < 1000; i++) s += p.at(i / 1000) ** 2
+  return Math.sqrt(s / 1000)
+})()
 const FRICATION_GAIN = 0.0055
 
 /**
@@ -295,6 +323,10 @@ export function synthesizeFrames(
   let prevFlow = 0
   const flutterDepth = 0.015 * source.flutter
 
+  const mixRec = EXCITATION ? Math.min(1, Math.max(0, source.excitation ?? 0)) : 0
+  let pulseIndex = EXCITATION ? Math.floor(EXCITATION.length / 2) : 0
+  let recorded: Float32Array | null = EXCITATION && mixRec > 0 ? EXCITATION[pulseIndex]! : null
+  let recordedPeak = EXCITATION_PEAK[pulseIndex] ?? 0
   let frameIndex = -1
   for (let n = 0; n < total; n++) {
     const fpos = n / perFrame
@@ -335,8 +367,22 @@ export function synthesizeFrames(
       periodSamples = (sampleRate / f0) * (1 + source.jitter * gauss(rng))
       ampJitter = 1 + source.shimmer * gauss(rng)
       pulse.setRd(lerp(cur.rd ?? source.rd, nxt.rd ?? source.rd, u))
+      // drift slowly through neighbouring pulse shapes (the set is ordered by shape), like a
+      // real voice, instead of jumping to an unrelated period every cycle
+      if (EXCITATION && mixRec > 0) {
+        pulseIndex = Math.min(EXCITATION.length - 1, Math.max(0, pulseIndex + Math.round((rng.next() - 0.5) * 2.2)))
+        recorded = EXCITATION[pulseIndex]!
+        recordedPeak = EXCITATION_PEAK[pulseIndex]!
+      }
     }
-    const dflow = pulse.at(phase)
+    let dflow = pulse.at(phase)
+    if (recorded && mixRec > 0) {
+      // align the pulse's closure with the LF pulse's (te) so mixing the two adds, not cancels
+      const pos = ((phase - pulse.te + recordedPeak + 1) % 1) * recorded.length
+      const i0 = Math.floor(pos)
+      const r = recorded[i0 % recorded.length]! + (recorded[(i0 + 1) % recorded.length]! - recorded[i0 % recorded.length]!) * (pos - i0)
+      dflow = (1 - mixRec) * dflow + mixRec * r * LF_RMS
+    }
     const inOpen = phase < pulse.te
     phase += 1 / periodSamples
     // higher-pole correction: the five-resonator cascade lacks the poles above F5 that lift a real

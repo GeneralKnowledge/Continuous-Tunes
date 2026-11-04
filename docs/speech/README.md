@@ -168,13 +168,21 @@ synthesis does.
 | CMU Pronouncing Dictionary | BSD-2-Clause style | npm `cmu-pronouncing-dictionary` (ISC wrapper), loaded lazily |
 | Project words | this repo | `src/speech/custom-lexicon.ts` |
 | Formant targets | our approximations of published measurements | `backends/formant/targets.ts` |
+| Pink Trombone waveguide | MIT | npm `pink-trombone-mod`, used by the experimental `tract` backend |
+| CMU ARCTIC (research only, not shipped) | permissive, attribution | diphones and glottal pulses built offline by `scripts/speech/corpus/` and loaded at runtime |
 
 Both dictionaries' licences are served with the app at `/licenses/speech-data.txt` (linked from
 the Speech tab), which their terms require for binary redistribution.
 
 ## Roadmap
 
-M2 replaced the plan below; see [m2-audit-and-plan.md](m2-audit-and-plan.md) for the current
+The hybrid-engine research round (November 2026) compared six engines on the same plans and set
+the next milestones H1–H7: see [hybrid-research.md](hybrid-research.md). Two experimental
+backends came out of it, `tract` (articulatory waveguide) and `units` (diphones + TD-PSOLA, needs
+a unit database), plus recorded excitation (`source.excitation`) for formant voices. Neither
+changes the default voice.
+
+Before that, M2 replaced the plan below; see [m2-audit-and-plan.md](m2-audit-and-plan.md) for the current
 milestones (M3 formant-coupled bursts and transitions, M4 voice search, M5 prosody, M6
 experimental articulatory and diphone backends). The original M1 roadmap is kept for history:
 

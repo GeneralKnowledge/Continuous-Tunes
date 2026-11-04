@@ -27,3 +27,4 @@ dist-ssr
 *.wav
 speech-benchmark/
 speech-out/
+__pycache__/
