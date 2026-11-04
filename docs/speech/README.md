@@ -4,7 +4,8 @@ A speech synthesis subsystem that lives beside the music system. It turns Englis
 British English (Standard Southern British) speech in the browser, with our own front end,
 prosody and formant synthesiser. It does not wrap eSpeak, MBROLA or any other TTS engine, needs
 no server and no model. See [research-assessment.md](research-assessment.md) for what was
-borrowed and why.
+borrowed and why, and [m2-audit-and-plan.md](m2-audit-and-plan.md) for the M2 audit, the wider
+research and reuse assessment, the milestone plan and measured results.
 
 ## Pipeline
 
@@ -67,14 +68,17 @@ MBROLA `.pho` file holds plus linguistic position. A diphone backend can consume
   aspirate the start of a following vowel (not after /s/); formants move from a locus blend at
   each consonant/vowel edge to each phone's target; diphthongs glide; short unstressed vowels
   undershoot towards schwa; nasal coupling spreads into neighbouring vowels.
-- `klatt.ts`: the synthesiser (KLGLOTT88-style glottal pulse with jitter, shimmer, open quotient,
-  tilt and breathiness; cascade with nasal pole/zero and five formants; parallel frication
-  bands; radiation). Deterministic for a given seed.
+- `klatt.ts`: the synthesiser (M2: Liljencrants–Fant glottal pulse with Rd voice quality,
+  jitter, shimmer, flutter and breathiness, radiation folded into the source; cascade with nasal
+  pole/zero, five formants and fixed higher poles; parallel frication bands behind a
+  per-consonant front-cavity high-pass). Deterministic for a given seed.
+- `backends/formant-m1/`: the M1 engine frozen as merged (backend `formant-m1`, voice
+  `alder-m1`) for A/B comparison. Do not edit it.
 
 ### Voices (`voice.ts`)
 A `SpeechVoice` is the speech genome: pitch (base, accent size, declination, question rise,
-final fall), timing (rate, pauses, stress lengthening), source (breathiness, jitter, shimmer,
-open quotient, tilt), tract (formant scale, bandwidth scale, nasality) and articulation
+final fall), timing (rate, pauses, stress lengthening), source (LF Rd, flutter, breathiness,
+jitter, shimmer, tilt; open quotient for the M1 backend), tract (formant scale, bandwidth scale, nasality) and articulation
 (consonant strength, transition time, coarticulation, aspiration). `validateVoice` clamps every
 field to a range that stays intelligible and fixes impossible combinations (peak pitch over
 450 Hz, a short vocal tract with a very low pitch, long transitions at high rates). Presets:
@@ -122,6 +126,14 @@ DC offset, clicks, voicing in vowels, how closely the audio's pitch follows the 
 reproducibility (bit-identical re-render), phoneme and diphone coverage, which words were
 guessed, letter-to-sound accuracy against Britfone, and ASR word error rate.
 
+**M2 additions.** `--set diagnostic|all` adds 52 consonant-contrast words scored as a closed
+set; `--seed n` re-renders with different noise (run three seeds before believing a 2–3 point
+difference); a voice can be a JSON file. `asr_whisper.py` takes several model directories
+(Whisper base.en/small.en, NeMo Citrinet CTC, Zipformer) and the report shows each, plus
+per-phone acoustics against natural ranges. `scripts/speech/ab.ts out/ alder-m1 alder` builds a
+blind A/B page; `scripts/speech/experiment.py` runs logged sweeps and CMA-ES searches over voice
+fields.
+
 ASR is an auxiliary signal only: Whisper has a strong language model and will "hear" likely
 words. The human check is `listening.html`: play, type what you hear, then reveal.
 
@@ -161,6 +173,10 @@ Both dictionaries' licences are served with the app at `/licenses/speech-data.tx
 the Speech tab), which their terms require for binary redistribution.
 
 ## Roadmap
+
+M2 replaced the plan below; see [m2-audit-and-plan.md](m2-audit-and-plan.md) for the current
+milestones (M3 formant-coupled bursts and transitions, M4 voice search, M5 prosody, M6
+experimental articulatory and diphone backends). The original M1 roadmap is kept for history:
 
 - **M0 foundations** — done.
 - **M1 first synthesiser** — done: formant synthesis, WAV, browser playback, benchmark.

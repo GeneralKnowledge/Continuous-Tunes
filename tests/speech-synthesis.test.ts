@@ -5,10 +5,10 @@ import { BACKENDS, getBackend } from '../src/speech/backends'
 import { buildFrames } from '../src/speech/backends/formant'
 import { synthesizeFrames } from '../src/speech/backends/formant/klatt'
 import { CONSONANTS, VOWELS } from '../src/speech/backends/formant/targets'
-import { BENCHMARK } from '../src/speech/benchmark'
-import { getVoicePreset, speak, validateVoice, VOICE_PRESETS, withControls, DEFAULT_VOICE } from '../src/speech'
+import { BENCHMARK, DIAGNOSTIC, scoreDiagnostic } from '../src/speech/benchmark'
+import { getVoicePreset, speak, validateVoice, VOICE_PRESETS, withControls, DEFAULT_VOICE, M1_VOICE } from '../src/speech'
 import { analyzeText } from '../src/speech/linguistic'
-import { audioHash, audioMetrics, coverage, editDistance, estimateF0, g2pAccuracy, planMetrics, wordErrorRate } from '../src/speech/metrics'
+import { audioHash, audioMetrics, coverage, editDistance, estimateF0, g2pAccuracy, planMetrics, segmentAcoustics, summarisePhoneAcoustics, voiceHash, wordErrorRate } from '../src/speech/metrics'
 import { PHONEME_IDS } from '../src/speech/phonemes'
 import { PAUSE, pitchAt, type SpeechPlan } from '../src/speech/plan'
 import { planProsody } from '../src/speech/prosody'
@@ -253,5 +253,73 @@ describe('speech settings', () => {
     expect(store.getItem('channel:house')).toBe('music state')
     store.setItem('settings', '{broken')
     expect(loadSpeechSettings(store)).toEqual(DEFAULT_SPEECH_SETTINGS)
+  })
+})
+
+describe('M2 acoustics and evaluation', () => {
+  it('LF pulse: flow returns to zero each period and the negative peak is −1', async () => {
+    const { LfPulse } = await import('../src/speech/backends/formant/klatt')
+    for (const rd of [0.5, 0.9, 1.6, 2.5]) {
+      const p = new LfPulse()
+      p.setRd(rd)
+      let area = 0
+      let min = 0
+      const N = 20000
+      for (let i = 0; i < N; i++) {
+        const v = p.at(i / N)
+        area += v / N
+        min = Math.min(min, v)
+      }
+      expect(Math.abs(area)).toBeLessThan(0.03) // the Rd regression balances areas only approximately
+      expect(min).toBeCloseTo(-1, 2)
+    }
+  })
+
+  it('keeps the frozen M1 backend reproducible and separate from the current engine', () => {
+    const text = 'Now say thin again.'
+    const m1a = speak(text, M1_VOICE, { lexicon })
+    const m1b = speak(text, M1_VOICE, { lexicon })
+    const cur = speak(text, DEFAULT_VOICE, { lexicon })
+    expect(m1a.backend).toBe('formant-m1')
+    expect(audioHash(m1a.samples)).toBe(audioHash(m1b.samples))
+    expect(audioHash(cur.samples)).not.toBe(audioHash(m1a.samples))
+  })
+
+  it('puts fricative energy where natural speech has it (below 8 kHz, /s/ above /ʃ/)', () => {
+    const r = speak('She sells sea shells. Five thin fish, fine thin vines.', DEFAULT_VOICE, { lexicon })
+    const sum = summarisePhoneAcoustics(segmentAcoustics(r.samples, r.sampleRate, r.plan))
+    const get = (p: string) => sum.find((x) => x.phone === p)!
+    expect(get('s').centroid).toBeGreaterThan(get('ʃ').centroid + 1500)
+    expect(get('f').centroid).toBeLessThan(7000) // M1: ~8 kHz, invisible to 16 kHz listeners
+    expect(get('θ').centroid).toBeLessThan(7000)
+    expect(get('f').levelDb).toBeLessThan(get('s').levelDb) // non-sibilants are weaker
+    for (const p of ['s', 'ʃ', 'f', 'θ']) expect(get(p).outside).toEqual([])
+    // voiced fricatives carry frication, not only a low murmur (M1: 98% of energy under 500 Hz)
+    expect(get('v').low).toBeLessThan(0.95)
+  })
+
+  it('gives vowels energy above 4 kHz (higher poles) without clipping', () => {
+    const r = speak('The weather has been lovely this week.', DEFAULT_VOICE, { lexicon })
+    const vowelRows = segmentAcoustics(r.samples, r.sampleRate, r.plan).filter((x) => VOWELS[x.phone])
+    expect(vowelRows.length).toBeGreaterThan(5)
+    const m = audioMetrics(r.samples, r.sampleRate, r.plan)
+    expect(m.clipped).toBe(0)
+    expect(m.voicedVowelShare).toBeGreaterThan(0.9)
+    expect(m.f0ErrorSemitones).toBeLessThan(0.5)
+  })
+
+  it('scores diagnostic items as a closed set', () => {
+    const item = DIAGNOSTIC.find((d) => d.target === 'thin')!
+    expect(scoreDiagnostic(item, ['now', 'say', 'thin', 'again'])).toEqual({ heard: 'thin', correct: true, foil: false })
+    expect(scoreDiagnostic(item, ['now', 'say', 'fin', 'again'])).toEqual({ heard: 'fin', correct: false, foil: true })
+    expect(scoreDiagnostic(item, ['now', 'save', 'it', 'again']).correct).toBe(false)
+    expect(DIAGNOSTIC.length).toBeGreaterThanOrEqual(50)
+  })
+
+  it('hashes voices independently of key order', () => {
+    const a = voiceHash(DEFAULT_VOICE)
+    const b = voiceHash(JSON.parse(JSON.stringify({ ...DEFAULT_VOICE, pitch: { ...DEFAULT_VOICE.pitch } })))
+    expect(a).toBe(b)
+    expect(voiceHash(M1_VOICE)).not.toBe(a)
   })
 })

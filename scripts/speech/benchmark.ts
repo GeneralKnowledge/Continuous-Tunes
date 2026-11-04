@@ -12,7 +12,7 @@
  * If <outDir>/asr*.json exist (from scripts/speech/asr_whisper.py; asr.json = Whisper base.en,
  * asr.small.json = small.en, …), word error rates and diagnostic scores are added per model.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { encodeWav, getVoicePreset, speak, validateVoice, withControls, type SpeechVoice } from '../../src/speech'
 import { BENCHMARK_SETS, scoreDiagnostic, type BenchmarkSet } from '../../src/speech/benchmark'

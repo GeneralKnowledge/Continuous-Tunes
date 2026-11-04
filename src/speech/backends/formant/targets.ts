@@ -151,11 +151,11 @@ const P_BURST: FricBand[] = [[900, 900, 0.6], [2200, 1500, 0.25], [4000, 2500, 0
 // vowel-like murmurs (M1 had /v ð/ only 6 dB under vowels and heard as nasals or nothing).
 export const CONSONANTS: Record<string, ConsonantTarget> = {
   p: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, fric: P_BURST, bypass: 0.3, stop: { burstMs: 8, burstGain: 0.8 } }),
-  b: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, av: 0.12, fric: P_BURST, bypass: 0.25, stop: { burstMs: 6, burstGain: 0.55 } }),
+  b: C({ formants: LABIAL, slope: 0.75, transitionMs: 45, av: 0.15, fric: P_BURST, bypass: 0.25, stop: { burstMs: 8, burstGain: 0.9 } }),
   t: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, fric: T_BURST, bypass: 0.15, stop: { burstMs: 12, burstGain: 0.6 }, fricHp: 2000 }),
-  d: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, av: 0.12, fric: T_BURST, bypass: 0.1, stop: { burstMs: 8, burstGain: 0.45 }, fricHp: 2000 }),
+  d: C({ formants: ALVEOLAR, slope: 0.4, transitionMs: 50, av: 0.15, fric: T_BURST, bypass: 0.1, stop: { burstMs: 10, burstGain: 0.7 }, fricHp: 2000 }),
   k: C({ formants: VELAR, slope: 0.7, transitionMs: 55, fric: K_BURST, bypass: 0.05, stop: { burstMs: 20, burstGain: 0.8 }, fricHp: 900 }),
-  g: C({ formants: VELAR, slope: 0.7, transitionMs: 55, av: 0.12, fric: K_BURST, bypass: 0.05, stop: { burstMs: 14, burstGain: 0.75 }, fricHp: 900 }),
+  g: C({ formants: VELAR, slope: 0.7, transitionMs: 55, av: 0.15, fric: K_BURST, bypass: 0.05, stop: { burstMs: 15, burstGain: 0.85 }, fricHp: 900 }),
   tʃ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, af: 1, fric: SH_SPECTRUM, stop: { burstMs: 60, burstGain: 1.0 }, fricHp: 1600 }),
   dʒ: C({ formants: POSTALV, slope: 0.5, transitionMs: 50, av: 0.2, af: 0.7, fric: SH_SPECTRUM, stop: { burstMs: 45, burstGain: 0.7 }, fricHp: 1600 }),
   f: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, af: 0.5, fric: F_SPECTRUM, bypass: 0.12, fricHp: 900 }),

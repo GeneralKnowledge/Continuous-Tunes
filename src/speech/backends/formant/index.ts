@@ -31,6 +31,8 @@ interface Phase {
   fricHp?: number
   /** stop releases: the frication decays from a transient instead of holding level */
   burst?: boolean
+  /** voiced stop closures: voicing dies away as pressure builds behind the closure */
+  closure?: boolean
   /** consonant data for boundary blending, if this phase is a consonant */
   cons?: ConsonantTarget
   vowel: boolean
@@ -119,7 +121,7 @@ export function buildPhases(plan: SpeechPlan, voice: SpeechVoice): Phase[] {
       // (often glottally reinforced); a full release there is heard as an affricate.
       const finalRelease = seg.phraseFinal && seg.wordFinal && !target.af ? 0.35 : 1
       const af = (target.af || target.stop.burstGain) * strength * finalRelease
-      phases.push({ ...base, start, end: end - burst, av: target.av, ah: 0, af: 0, bypass: 0, fric, fricHp: target.fricHp })
+      phases.push({ ...base, start, end: end - burst, av: target.av, ah: 0, af: 0, bypass: 0, fric, fricHp: target.fricHp, closure: true })
       phases.push({ ...base, start: end - burst, end, av: target.av, ah: 0, af, bypass: target.bypass, fric, fricHp: target.fricHp, burst: !target.af })
       return
     }
@@ -252,6 +254,9 @@ export function buildFrames(plan: SpeechPlan, voice: SpeechVoice, sampleRate: nu
       // A release is a transient: noise peaks at the release and decays (time constant a third of
       // the burst) into the aspiration, rather than a flat block of frication, which is heard as
       // an affricate ("cat" → "catch"). Affricates (af set on the target) keep their flat frication.
+      // Voicing in a stop closure decays as oral pressure rises (Westbury 1983); a voice bar held
+      // at full level for the whole closure sounds like a continuant (/b/ → /v/, /d/ → /ð/).
+      if (q.closure && av > 0) av *= 1 - 0.7 * Math.min(1, (time - q.start) / Math.max(1e-3, q.end - q.start))
       let af = q.af
       if (q.burst) af *= 1.6 * Math.exp((-3 * (time - q.start)) / Math.max(1e-3, q.end - q.start))
       return { av, ah, af, bypass: q.bypass }

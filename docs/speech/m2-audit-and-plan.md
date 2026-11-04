@@ -139,6 +139,83 @@ Acceptance criterion for promoting any change into the default `formant` backend
 on mean WER across the four recognisers on the core set, an improvement on the diagnostic set or
 on the targeted acoustic measurement, no new clipping or discontinuities, and an A/B listen.
 
-## 4. Results
+## 4. What M2 changed
 
-See section 5 of this file (filled in when the M2 runs complete).
+All in `src/speech/backends/formant/` unless noted. The M1 engine is untouched in
+`backends/formant-m1/` (backend id `formant-m1`, voice `alder-m1`) and reproduces the M1 audio bit
+for bit.
+
+| Change | Why (measurement) |
+|---|---|
+| LF glottal flow derivative with Rd voice quality, Klatt flutter (`klatt.ts`, `LfPulse`); new voice fields `source.rd`, `source.flutter` | Standard, interpretable voice-quality control; replaces KLGLOTT88 + tilt |
+| Radiation folded into the source; noise sources white (flat after radiation) | Removed the +6 dB/oct on frication that pushed /f θ/ above 8 kHz |
+| First-order emphasis `HPC = 0.6` on the voicing | 0.95 matched Peterson & Barney within ~3 dB but every recogniser heard the extra buzz as affrication ("mat" → "match"); 0.6 is the measured compromise |
+| Five fixed resonances above F5 (`higherPoles`) | Vowels had nothing above ~5 kHz (−90 dB at 5–6 kHz); now −50 to −60 dB, like a real tract's higher modes |
+| Fourth-order high-pass on frication per consonant (`fricHp`, the front-cavity cut-off) | /s/ had energy at 1 kHz 9 dB under its peak; now −30 dB |
+| Fricative and burst spectra and levels re-derived from Jongman et al. 2000 and Stevens 1998 (`targets.ts`) | /s/ −13 dB, /ʃ/ −12 dB, /f θ/ −22 dB re vowels; centroids /s/ 6.7 kHz, /ʃ/ 4.1 kHz, /f/ 5.7 kHz |
+| Voiced fricatives: voicing 0.22, frication 0.8–0.9, noise modulated by the glottal cycle | /v ð/ were nasal-like murmurs (98% of energy < 500 Hz); now 82% with real frication |
+| Stop releases decay from a transient; phrase-final releases at 35% | Flat noise blocks were heard as affricates |
+| Voiced stops: stronger, longer bursts; closure voicing decays by 70% across the closure | Held voice bar + inaudible burst was heard as /v ð/ |
+| Nasal murmur: zero at 450 Hz (Klatt's murmur setting) instead of the place zero, narrower B2/B3 | Murmur energy at 1–2 kHz was 62 dB under the low band (a pure hum, heard as a voiced stop); now ~31 dB |
+| `metrics.ts`: `segmentAcoustics`, `summarisePhoneAcoustics`, `NATURAL_RANGES`, `voiceHash`; FFT reused from `src/analysis/audio.ts` | Per-phone diagnostics in every benchmark report |
+| `benchmark.ts`: 52-item consonant `DIAGNOSTIC` set, closed-set `scoreDiagnostic`; script flags `--set`, `--seed`, `--backend`, voice JSON files; several recognisers; core-only WER | Evaluation that can separate acoustics from language-model guessing |
+| `scripts/speech/asr_whisper.py`: Whisper base/small, Citrinet CTC, Zipformer | Four recognisers with very different reliance on language |
+| `scripts/speech/ab.ts`: blind A/B page with a tally | Listening comparison of any two configurations |
+| `scripts/speech/experiment.py`: sweeps and CMA-ES over voice fields, JSONL log with commit + voice hash | Reproducible voice experiments (M4 groundwork) |
+
+## 5. Results
+
+Three seeds per configuration (seed changes noise and jitter only), all 114 items (62 core + 52
+diagnostic), four recognisers, voice Alder, 22.05 kHz. Run-to-run standard deviation on the
+baseline was ±1.4 points (mean WER) and ±1.7 points (diagnostic), so differences below ~3 points
+are not meaningful.
+
+| | M1 (formant-m1) | M2 (formant) |
+|---|---|---|
+| Mean WER, core set, 4 recognisers | 37.4% ± 1.4 | **33.9% ± 0.9** |
+| Whisper base / small | 25% / 18% | 21% / 17% |
+| Citrinet (CTC) / Zipformer | 63% / 43% | 59% / 38% |
+| Diagnostic words heard correctly (mean of 4) | 31.2% ± 1.7 | 32.7% ± 1.0 |
+| nasal vs stop | 37% | **48%** |
+| velar vs alveolar | 34% | 39% |
+| fricative voicing (/z/ vs /s/) | 2% | **17%** |
+| /ʃ/ vs /tʃ/ | 40% | 39% |
+| final voicing | 32% | 32% |
+| /f/ vs /θ/ (and /v/) | 35% | 30% |
+| vowels (in b-initial words) | 24% | 16% |
+| Clipping, NaNs, reproducibility | none, none, bit-identical | none, none, bit-identical |
+| Pitch follows plan (median error) | 0.14 st | 0.08 st |
+| Render real-time factor (one Node thread) | 0.005 | 0.010 |
+
+Rendering cost at other rates (North Wind sentence): 16 kHz 0.028, 44.1 kHz 0.014, 48 kHz
+0.016 real-time factor; heap ~60 MB; no clipping or NaNs at any rate. The TypeScript runtime is
+~100× faster than real time, so a native (Rust/WASM) port is not justified.
+
+**Reading these honestly.** The core-set improvement (−3.5 points, ~2.5σ) is real and comes
+mostly from the sentences, where the brighter, fuller spectrum helps every recogniser. The
+consonant set improved only where the acoustic cause was clear and fixed (nasals, /z/); overall
+it is within noise. Several items still fail for one reason that M2 did not solve: a stop or
+nasal right after "say" in the carrier is heard as /v/ ("say bead" → "save it", "say tin" →
+"save him"), which also drags down the vowel row because those vowels sit in b-initial words.
+That transition (eɪ glide into a closure) is the first job of M3. /f/ vs /θ/ remains at chance:
+the two are acoustically almost identical in natural speech too, and listeners rely on the F2
+transition, which needs the formant-coupled bursts and context-dependent loci planned for M3.
+
+Recordings (shared folder `recordings/speech/m2/`):
+- `ab/ab.html`: blind A/B of M1 vs M2 on all 114 items (open it from the folder; it plays the
+  WAVs beside it). Export gives the tally.
+- `benchmark/`: M2 clips (seed 1), report and every recogniser's transcripts.
+- `baseline-m1-seed2/`: the M1 report and transcripts for the same items.
+- `three-seed-summary.txt`: the numbers above.
+
+## 6. Known limitations and next steps
+
+- The release-window metric (`release` in the per-phone table) includes 20 ms of the following
+  vowel, so for aspirated stops it reports the aspiration, not the burst; treat its warnings on
+  /t k/ as a measurement limitation.
+- Recogniser scores are proxies with known biases (Whisper's language model, Citrinet's US
+  training data). No human listening scores exist yet; the A/B page is the next step for that.
+- The voice genome now includes `rd` and `flutter`; target tables (`targets.ts`) are not yet
+  exposed to search. M4 should expose bounded offsets (burst gains, fricative levels, loci) and
+  run `experiment.py cmaes` with held-out items to avoid fitting the recognisers.
+- Not started (by design, see the plan): articulatory backend, diphone/PSOLA, prosody changes.
