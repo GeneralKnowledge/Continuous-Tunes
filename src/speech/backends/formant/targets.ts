@@ -138,7 +138,10 @@ const LABIODENTAL = F(240, 1100, 2150, 60, 300, 400)
 // Jongman, Wayland & Wong (2000): /s/ peaks high (spectral mean ~6 kHz), /ʃ/ lower (~4 kHz) and
 // louder, /f θ/ diffuse and ~10 dB weaker; burst spectra after Stevens (1998): /t/ high and
 // diffuse-rising, /k/ compact at the following vowel's F2–F3, /p/ diffuse-falling.
-const S_SPECTRUM: FricBand[] = [[5600, 1400, 0.9], [7600, 1800, 0.55], [3200, 600, 0.06]]
+// M3: /s/ peaks higher and its front-cavity cut-off is 4 kHz (was 5.6 kHz peak, 3 kHz cut-off):
+// with energy at 3–4 kHz only 6 dB under the peak, recognisers heard "say" as "sha"/"shave"
+// (Citrinet kept the carrier word in 10% of items; 71% after). Centroid 6.7 → 7.1 kHz.
+const S_SPECTRUM: FricBand[] = [[6000, 1200, 0.9], [7800, 1800, 0.5], [3200, 600, 0.03]]
 const SH_SPECTRUM: FricBand[] = [[2700, 700, 1.0], [4000, 1400, 0.9], [6000, 2000, 0.35]]
 const TH_SPECTRUM: FricBand[] = [[6000, 3500, 0.32], [3000, 1600, 0.12], [8000, 2000, 0.12]]
 const F_SPECTRUM: FricBand[] = [[5200, 4000, 0.3], [2000, 1500, 0.1], [8000, 2500, 0.1]]
@@ -162,8 +165,8 @@ export const CONSONANTS: Record<string, ConsonantTarget> = {
   v: C({ formants: LABIODENTAL, slope: 0.7, transitionMs: 40, av: 0.22, af: 0.9, fric: F_SPECTRUM, bypass: 0.1, fricHp: 900 }),
   θ: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, af: 0.5, fric: TH_SPECTRUM, bypass: 0.12, fricHp: 900 }),
   ð: C({ formants: DENTAL, slope: 0.6, transitionMs: 40, av: 0.22, af: 0.8, fric: TH_SPECTRUM, bypass: 0.08, fricHp: 900 }),
-  s: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, af: 1, fric: S_SPECTRUM, fricHp: 3000 }),
-  z: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, av: 0.22, af: 0.85, fric: S_SPECTRUM, fricHp: 3000 }),
+  s: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, af: 1, fric: S_SPECTRUM, fricHp: 4000 }),
+  z: C({ formants: ALVEOLAR, slope: 0.5, transitionMs: 40, av: 0.22, af: 0.85, fric: S_SPECTRUM, fricHp: 4000 }),
   ʃ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, af: 1, fric: SH_SPECTRUM, fricHp: 1700 }),
   ʒ: C({ formants: POSTALV, slope: 0.55, transitionMs: 45, av: 0.22, af: 0.85, fric: SH_SPECTRUM, fricHp: 1700 }),
   h: C({ formants: SCHWA, slope: 1, transitionMs: 20, ah: 0.45, followsVowel: true }),

@@ -323,3 +323,40 @@ describe('M2 acoustics and evaluation', () => {
     expect(voiceHash(M1_VOICE)).not.toBe(a)
   })
 })
+
+describe('M5 connected speech', () => {
+  const words = (text: string, connectedSpeech = true) => analyzeText(text, { lexicon, connectedSpeech }).sentences.flatMap((s) => s.phrases.flatMap((p) => p.words))
+  const ids = (w: { phones: { id: string }[] }) => w.phones.map((p) => p.id).join(' ')
+
+  it('moves the nucleus off a phrase-final "again"', () => {
+    const p = plan('Now say bead again.')
+    const accented = new Set(segs(p).filter((s) => s.accented).map((s) => p.words[s.word]!.text))
+    expect(accented.has('bead')).toBe(true)
+    expect(accented.has('again')).toBe(false)
+    // alone, "again" keeps its accent
+    expect(segs(plan('Again.')).some((s) => s.accented)).toBe(true)
+  })
+
+  it('chooses noun and verb forms of homographs from the word before', () => {
+    const w = words('I want to record a record. I have read it. They live near a live band.')
+    const get = (text: string, n = 0) => w.filter((x) => x.text === text)[n]!
+    expect(get('record', 0).phones.findIndex((p) => p.stress === 1)).toBeGreaterThan(get('record', 1).phones.findIndex((p) => p.stress === 1))
+    expect(ids(get('read'))).toBe('r e d')
+    expect(ids(get('live', 0))).toContain('ɪ')
+    expect(ids(get('live', 1))).toContain('aɪ')
+  })
+
+  it('links a final r before a vowel in the same phrase only', () => {
+    const w = words('Far away. Far, away. Far town.')
+    expect(ids(w[0]!).endsWith('r')).toBe(true)
+    expect(ids(w[2]!).endsWith('r')).toBe(false)
+    expect(ids(w[4]!).endsWith('r')).toBe(false)
+  })
+
+  it('leaves the M1 front end unchanged', () => {
+    const w = words('Far away, I want to record it again.', false)
+    expect(ids(w[0]!).endsWith('r')).toBe(false)
+    expect(w.some((x) => x.deaccent)).toBe(false)
+    expect(validateVoice(M1_VOICE).voice.frontend).toBe('m1')
+  })
+})

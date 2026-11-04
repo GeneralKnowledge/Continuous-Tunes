@@ -40,7 +40,7 @@ export function speak(text: string, voiceIn: SpeechVoice, opts: SpeakOptions = {
   const { voice, issues } = validateVoice(voiceIn)
   const sampleRate = opts.sampleRate ?? 22050
   const backendId = opts.backend ?? voice.backend
-  const utterance = analyzeText(text, { lexicon: opts.lexicon ?? EMPTY_LEXICON })
+  const utterance = analyzeText(text, { lexicon: opts.lexicon ?? EMPTY_LEXICON, connectedSpeech: voice.frontend !== 'm1' })
   const plan = planProsody(utterance, voice)
   const raw = getBackend(backendId).render(plan, voice, { sampleRate, seed: opts.seed ?? 1 })
   return {

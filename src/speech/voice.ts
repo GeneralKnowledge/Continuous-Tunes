@@ -73,6 +73,9 @@ export interface SpeechVoice {
   name: string
   /** Synthesis backend id (see backends/index.ts) */
   backend: string
+  /** 'm1' keeps the M1/M2 front end (no connected-speech rules) so the frozen baseline voice
+   *  reproduces its audio bit for bit; omitted = current front end */
+  frontend?: 'm1'
   pitch: VoicePitch
   timing: VoiceTiming
   source: VoiceSource
@@ -130,6 +133,7 @@ export const M1_VOICE: SpeechVoice = {
   id: 'alder-m1',
   name: 'Alder (M1 baseline)',
   backend: 'formant-m1',
+  frontend: 'm1',
   source: { ...DEFAULT_VOICE.source, spectralTilt: 0.25 },
 }
 
@@ -211,6 +215,7 @@ export function validateVoice(input: SpeechVoice): VoiceValidation {
     id: input.id || 'custom',
     name: input.name || 'Custom voice',
     backend: input.backend || 'formant',
+    ...(input.frontend === 'm1' ? { frontend: 'm1' as const } : {}),
     pitch: fix('pitch'),
     timing: fix('timing'),
     source: fix('source'),

@@ -130,9 +130,9 @@ Ordered by expected audible benefit per unit of work, with dependencies.
 | M2a | **Measurement first**: frozen M1 backend for A/B, consonant diagnostic set, four recognisers, per-phone acoustics, voice hashes, A/B listening page | Every later change needs to be shown, not asserted | done in this PR |
 | M2b | **Source**: LF/Rd glottal pulse, flutter, calibrated spectral balance | Largest single audible defect; cheap | done in this PR |
 | M2c | **Obstruent acoustics**: flat-after-radiation noise, front-cavity high-pass, fricative spectra and levels from Jongman 2000, voiced fricatives with real frication, transient bursts, weak final releases | Directly targets the benchmark failures | done in this PR |
-| M3 | **Formant-coupled bursts and nasals**: move release noise into a 6-formant parallel branch driven by the transition's own formants (klatt-syn's layout); nasal pole/zero pairs during adjacent vowels; vowel targets per context (front/back locus tables) | Next-largest consonant cue errors; needs M2 measurements to tune | next |
+| M3 | **Formant-coupled bursts and nasals**: move release noise into a 6-formant parallel branch driven by the transition's own formants (klatt-syn's layout); nasal pole/zero pairs during adjacent vowels; vowel targets per context (front/back locus tables) | Next-largest consonant cue errors; needs M2 measurements to tune | first pass (section 7): /s/ spectrum; locus equations tried and rejected |
 | M4 | **Voice genome + search harness**: CMA-ES/NSGA-II over bounded `SpeechVoice` + target-table offsets, objectives as above, every run logged with voice hash and git commit | Turns hand-tuning into reproducible experiments | planned |
-| M5 | **Prosody and connected speech**: linking /r/, homographs, function-word reduction by rate, phrase planning, ToBI-style British tunes | Naturalness once segments are reliable | planned |
+| M5 | **Prosody and connected speech**: linking /r/, homographs, function-word reduction by rate, phrase planning, ToBI-style British tunes | Naturalness once segments are reliable | first pass (section 7): nucleus placement, homographs, linking /r/ |
 | M6 | **Experimental backends**: (a) articulatory via `pink-trombone-mod` driven from SpeechPlan; (b) diphone/PSOLA only once a clean British diphone set exists | Only promoted if they beat the formant engine on the same plans | planned |
 
 Acceptance criterion for promoting any change into the default `formant` backend: no regression
@@ -219,3 +219,55 @@ Recordings (shared folder `recordings/speech/m2/`):
   exposed to search. M4 should expose bounded offsets (burst gains, fricative levels, loci) and
   run `experiment.py cmaes` with held-out items to avoid fitting the recognisers.
 - Not started (by design, see the plan): articulatory backend, diphone/PSOLA, prosody changes.
+
+## 7. M3/M5 first pass (after PR #15)
+
+Same protocol as section 5: 3 seeds, 114 items, 4 recognisers, baseline is M2 as merged
+(`0389c96`). The `alder-m1` voice still renders bit for bit (new voice field `frontend: 'm1'`
+keeps the old front end for it).
+
+**What changed**
+
+| Change | Why (measurement) |
+|---|---|
+| /s/ and /z/ spectrum: peak 6.0 kHz (was 5.6), front-cavity high-pass 4 kHz (was 3 kHz), weaker 3.2 kHz band (`targets.ts`) | The carrier "say" was heard as "sha", "shave" or "shake" in about a third of the misses. Energy at 3–4 kHz sat only 6 dB under the peak, where /ʃ/ lives. Citrinet kept "say" in 8% of items before and 77% after. /s/ centroid is 6.7 → 7.1 kHz, still inside the natural range. |
+| Phrase-final adverbs ("again", "too", "either", "though", "anyway", "then", "yet", "already", "please", "instead") are deaccented after another accented word (`linguistic.ts`, `prosody.ts`) | British nucleus placement ("say BEAD again", O'Connor & Arnold; Wells 2006). Before this, the nucleus landed on "again" in every diagnostic item. |
+| Noun/verb homographs chosen from the previous word: stress pairs (record, present, object, permit, …), segment pairs (live, wind, close, use, excuse, abuse), and "read" /e/ after have/be | Previously the lexicon's first entry was always used. |
+| Linking /r/ in the same phrase ("far away", "here it is") | SSB is non-rhotic; the lexicon drops every final r. |
+
+**Rejected after measurement** (single-seed screens unless noted; each is in the git history of
+this thread, not in the code):
+
+- F1 forced to the locus at every obstruent edge: mean WER +12 points (3 seeds).
+- A 12 ms voicing onset ramp after /b d g/: no effect on top of the above (3 seeds).
+- Sussman et al. (1991) F2 locus equations in place of single loci: CV+VC gave WER +4 and
+  diagnostic −5. VC only also got worse. At word boundaries only it made no difference. The
+  exaggerated M2 transitions are compensating for weak bursts, so they stay until bursts improve.
+- Softer voiced-stop bursts (b 0.5, d 0.45, g 0.55): no change.
+- An even higher /s/ (peak 6.5 kHz, cut-off 4.5 kHz): same scores, centroid 7.6 kHz, further
+  from natural values.
+
+**Results (3 seeds)**
+
+| | M2 (main) | M3/M5 first pass |
+|---|---|---|
+| Mean WER, core set, 4 recognisers | 33.9% ± 0.9 | **29.7% ± 1.3** |
+| Whisper base / small | 21% / 17% | 17% / 17% |
+| Citrinet / Zipformer | 59% / 38% | 52% / 32% |
+| Diagnostic words heard correctly (mean of 4) | 32.7% ± 1.0 | **36.4% ± 1.0** |
+| Diagnostic by recogniser (base / small / Citrinet / Zipformer) | 34 / 41 / 13 / 42 | 45 / 51 / 17 / 33 |
+| Carrier word "say" kept (base / small / Citrinet / Zipformer) | 74 / 59 / 8 / 59% | 92 / 68 / 77 / 63% |
+
+**Reading these honestly.** The WER gain (−4.2 points, ~3σ) and the diagnostic gain (+3.7) are
+real, and most of both comes from the /s/ fix. Not everything moved the same way. Zipformer's
+diagnostic score fell from 42% to 33%, and the nasal-vs-stop row fell from 48% to 39%, so the
+gain is not uniform. "Say bead" → "save it" is still the most common carrier error (about 20
+model-items per seed, unchanged). It is not caused by the F2 transition, the F1 edge or the burst
+level, which are the three things tested. The remaining suspects are the eɪ offglide timing and
+the voice offset into the closure. Prosody changes are not judged by the recognisers. They need
+the A/B listen (`recordings/speech/m3m5/ab/ab.html`, A = M2, B = this pass).
+
+**Next.** Measure the eɪ offset (duration of the glide, amplitude decay over the last periods)
+against natural "say" tokens. Then do formant-coupled bursts, the remaining M3 item, which is
+what should let the locus equations come back. Then M4 search over target-table offsets with
+held-out items.
