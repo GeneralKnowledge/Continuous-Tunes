@@ -7,6 +7,7 @@
  * enforces the relationships between fields (a short vocal tract with a very low pitch, a pitch
  * range that would push the voice above ~450 Hz, …).
  */
+import { FITTED_PITCH } from './prosody-fitted'
 
 export interface VoicePitch {
   /** Speaking pitch at the start of a phrase, Hz */
@@ -79,6 +80,9 @@ export interface SpeechVoice {
   /** 'm1' keeps the M1/M2 front end (no connected-speech rules) so the frozen baseline voice
    *  reproduces its audio bit for bit; omitted = current front end */
   frontend?: 'm1'
+  /** 'fitted': durations and tune fitted to recorded speech (prosody-fitted.ts); omitted = Klatt's
+   *  rules and the hand-set tune */
+  prosody?: 'fitted'
   pitch: VoicePitch
   timing: VoiceTiming
   source: VoiceSource
@@ -141,6 +145,18 @@ export const M1_VOICE: SpeechVoice = {
   source: { ...DEFAULT_VOICE.source, spectralTilt: 0.25 },
 }
 
+/**
+ * Alder with prosody fitted to recorded speech (prosody-fitted.ts): durations and tune from the
+ * CMU ARCTIC awb prompts. Kept out of the preset list until a listening test decides.
+ */
+export const FITTED_VOICE: SpeechVoice = {
+  ...DEFAULT_VOICE,
+  id: 'alder-fitted',
+  name: 'Alder (fitted prosody)',
+  prosody: 'fitted',
+  pitch: { ...DEFAULT_VOICE.pitch, ...FITTED_PITCH },
+}
+
 const preset = (base: SpeechVoice, patch: {
   id: string
   name: string
@@ -185,7 +201,7 @@ export const VOICE_PRESETS: readonly SpeechVoice[] = [
 ]
 
 export function getVoicePreset(id: string): SpeechVoice {
-  return [...VOICE_PRESETS, M1_VOICE].find((v) => v.id === id) ?? DEFAULT_VOICE
+  return [...VOICE_PRESETS, M1_VOICE, FITTED_VOICE].find((v) => v.id === id) ?? DEFAULT_VOICE
 }
 
 export interface VoiceValidation {
@@ -220,6 +236,7 @@ export function validateVoice(input: SpeechVoice): VoiceValidation {
     name: input.name || 'Custom voice',
     backend: input.backend || 'formant',
     ...(input.frontend === 'm1' ? { frontend: 'm1' as const } : {}),
+    ...(input.prosody === 'fitted' ? { prosody: 'fitted' as const } : {}),
     pitch: fix('pitch'),
     timing: fix('timing'),
     source: fix('source'),
