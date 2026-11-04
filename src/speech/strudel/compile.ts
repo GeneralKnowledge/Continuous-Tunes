@@ -53,9 +53,21 @@ export interface Tune {
   fTol: number
   /** formant glides with filter envelopes (else steps) */
   glide: boolean
+  /** fixed gain references for voiced, aspiration and frication (else each utterance's maxima) */
+  scale: [number, number, number] | null
+  /** attack of the noise layers, seconds */
+  noiseAttack: number
+  /** glottal-rate modulation of frication in voiced fricatives (Strudel tremolo at f0) */
+  fricMod: boolean
+  /** include Klatt's bypass path (flat frication) */
+  bypass: boolean
+  /** voiced events hold whole pitch periods so consecutive events start in phase */
+  align: boolean
+  /** largest gain spread (log ratio) inside one event */
+  gainTol: number
 }
 
-const TUNE: Tune = { lowpass: 1.4, voicedGain: 0.8, aspGain: 0.1, fricGain: 0.12, tilt: 0, highpass: true, attack: 0.008, release: 0.012, f0Tol: 0.012, fTol: 0.04, glide: true }
+const TUNE: Tune = { lowpass: 1.4, voicedGain: 0.8, aspGain: 0.07, fricGain: 0.075, tilt: 0, highpass: true, attack: 0.003, release: 0.005, f0Tol: 0.012, fTol: 0.06, glide: true, align: false, gainTol: 1.0, noiseAttack: 0.002, bypass: true, fricMod: true, scale: [13.3, 0.04, 1] }
 
 
 export interface StrudelSpeech {
@@ -97,6 +109,8 @@ interface Slice {
   /** nasal zero (Hz); equal to NASAL_POLE when the tract is oral */
   nz: number
   np: number
+  bypass: number
+  fhp: number
 }
 
 function average(frames: SynthFrame[]): Slice {
@@ -117,113 +131,193 @@ function average(frames: SynthFrame[]): Slice {
     pg: [m((x) => x.pg1), m((x) => x.pg2), m((x) => x.pg3)],
     nz: m((x) => x.nz),
     np: m((x) => x.np ?? NASAL_POLE),
+    bypass: m((x) => x.bypass),
+    fhp: m((x) => x.fhp ?? 0),
   }
 }
 
-interface Ev {
+export interface Ev {
   on: boolean
   /** [freq Hz (osc), filter Hz, Q, gain] */
   v: [number, number, number, number]
+  /** noise layers: depth of the glottal-rate amplitude modulation (voiced fricatives), at v[0] Hz */
+  d?: number
 }
 
 /** one layer's events → mini-notation strings sharing the same @-structure */
-function layer(evs: Ev[], tol: (a: Ev['v'], b: Ev['v']) => boolean): { freq: string; bpf: string; gain: string; count: number } {
-  const groups: { on: boolean; v: Ev['v']; n: number }[] = []
+function layer(evs: Ev[], tol: (a: Ev['v'], b: Ev['v']) => boolean, noise = false) {
+  const groups: { on: boolean; v: Ev['v']; d: number; n: number }[] = []
   for (const e of evs) {
     const g = groups[groups.length - 1]
-    if (g && g.on === e.on && (!e.on || tol(g.v, e.v))) {
+    const d = e.d ?? 0
+    if (g && g.on === e.on && (!e.on || (tol(g.v, e.v) && Math.abs(g.d - d) < 0.1 && near(g.v[0] || 1, e.v[0] || 1, 0.05)))) {
       g.n++
       continue
     }
-    groups.push({ on: e.on, v: [...e.v] as Ev['v'], n: 1 })
+    groups.push({ on: e.on, v: [...e.v] as Ev['v'], d, n: 1 })
   }
   const w = (s: string, n: number) => (n > 1 ? `${s}@${n}` : s)
   const freq: string[] = []
   const bpf: string[] = []
   const gain: string[] = []
+  const trem: string[] = []
+  const depth: string[] = []
   let count = 0
+  let modulated = false
   for (const g of groups) {
     if (!g.on) {
-      freq.push(w('~', g.n))
-      bpf.push(w('~', g.n))
-      gain.push(w('~', g.n))
+      for (const a of [freq, bpf, gain, trem, depth]) a.push(w('~', g.n))
       continue
     }
     count++
-    freq.push(w(String(Math.round(g.v[0])), g.n))
+    freq.push(w(noise ? 'white' : String(Math.round(g.v[0])), g.n))
     bpf.push(w(`${Math.round(g.v[1])}:${g.v[2].toFixed(1)}`, g.n))
     gain.push(w(g.v[3].toFixed(3), g.n))
+    // tremolo at the voice's f0 with this depth (0 = steady noise)
+    trem.push(w(g.d > 0 ? String(Math.round(g.v[0])) : '0', g.n))
+    depth.push(w(g.d.toFixed(2), g.n))
+    if (g.d > 0) modulated = true
   }
-  return { freq: freq.join(' '), bpf: bpf.join(' '), gain: gain.join(' '), count }
+  return { freq: freq.join(' '), bpf: bpf.join(' '), gain: gain.join(' '), trem: modulated ? `.tremolo("${trem.join(' ')}").tremolodepth("${depth.join(' ')}")` : '', count }
 }
 
 /**
- * One layer as gliding events: each event's band-pass moves from its start value to the next
- * event's start value with Strudel's filter envelope (`bpf("F:Q:octaves")` + `bpattack`, sustain 1),
- * so formant tracks are piecewise exponential instead of steps. An event is extended while a
- * straight (log-frequency) glide stays within `fTol` of every slice and f0 and gain stay close.
+ * Gliding events for the voiced layers. Every event's band-pass moves from its start value to the
+ * next event's start value with Strudel's filter envelope (`bpf("F:Q:octaves")` + `bpattack`,
+ * sustain 1), and its pitch the same way with the pitch envelope (`penv` + `pattack`), so formant
+ * and pitch tracks are piecewise exponential instead of steps.
+ *
+ * All voiced layers share one segmentation: an event is extended while straight glides stay within
+ * tolerance for every layer. Shared boundaries mean the layers' sawtooths restart together, in
+ * phase, so their sum behaves like one source through a bank of parallel formant filters instead
+ * of several unrelated buzzes.
  */
-function glideLayer(evs: Ev[], step: number, T: Tune, maxLen = 0.25): { freq: string; bpf: string; att: string; gain: string; count: number } {
-  const n = evs.length
-  const out = { freq: [] as string[], bpf: [] as string[], att: [] as string[], gain: [] as string[], count: 0 }
-  const w = (x: string, k: number) => (k > 1 ? `${x}@${k}` : x)
-  const lf = (i: number) => Math.log(evs[i]!.v[1])
+function glideBounds(layers: Ev[][], step: number, T: Tune, maxLen = 0.25): [number, number, boolean][] {
+  const n = layers[0]!.length
+  const on = (i: number) => layers[0]![i]!.on
+  const fitsLayer = (evs: Ev[], i: number, end: number) => {
+    const a = Math.log(evs[i]!.v[1])
+    const b = Math.log(evs[end]!.v[1])
+    const pa = Math.log(evs[i]!.v[0])
+    const pb = Math.log(evs[end]!.v[0])
+    let glo = Infinity
+    let ghi = 0
+    for (let m = i; m <= end; m++) {
+      const v = evs[m]!.v
+      const u = (m - i) / Math.max(1, end - i)
+      if (Math.abs(Math.log(v[1]) - (a + (b - a) * u)) > T.fTol) return false
+      if (Math.abs(Math.log(v[0]) - (pa + (pb - pa) * u)) > T.f0Tol) return false
+      glo = Math.min(glo, v[3])
+      ghi = Math.max(ghi, v[3])
+    }
+    return Math.log((ghi + 1e-6) / (glo + 1e-6)) < T.gainTol
+  }
+  const out: [number, number, boolean][] = []
   let i = 0
   while (i < n) {
-    if (!evs[i]!.on) {
-      let j = i
-      while (j < n && !evs[j]!.on) j++
-      for (const a of [out.freq, out.bpf, out.att, out.gain]) a.push(w('~', j - i))
-      i = j
-      continue
-    }
     let j = i + 1
-    const fits = (end: number) => {
-      // glide from slice i to slice `end` (inclusive) must pass near every slice in between
-      const a = lf(i)
-      const b = lf(end)
-      let f0lo = Infinity
-      let f0hi = 0
-      let glo = Infinity
-      let ghi = 0
-      for (let m = i; m <= end; m++) {
-        const v = evs[m]!.v
-        const at = a + ((b - a) * (m - i)) / Math.max(1, end - i)
-        if (Math.abs(Math.log(v[1]) - at) > T.fTol) return false
-        f0lo = Math.min(f0lo, v[0])
-        f0hi = Math.max(f0hi, v[0])
-        glo = Math.min(glo, v[3])
-        ghi = Math.max(ghi, v[3])
-      }
-      return Math.log(f0hi / f0lo) < 2 * T.f0Tol && Math.log((ghi + 1e-6) / (glo + 1e-6)) < 0.5
+    if (!on(i)) {
+      while (j < n && !on(j)) j++
+    } else {
+      while (j < n && on(j) && (j - i + 1) * step <= maxLen && layers.every((l) => fitsLayer(l, i, j))) j++
     }
-    while (j < n && evs[j]!.on && (j - i + 1) * step <= maxLen && fits(j)) j++
-    // event covers slices i..j-1 and glides towards slice j (the next event's start) when voiced on
-    const endIdx = j < n && evs[j]!.on ? j : j - 1
-    const seg = evs.slice(i, j)
-    const f0 = seg.reduce((s2, e) => s2 + e.v[0], 0) / seg.length
-    const g = seg.reduce((s2, e) => s2 + e.v[3], 0) / seg.length
-    const q = seg.reduce((s2, e) => s2 + e.v[2], 0) / seg.length
-    const fa = evs[i]!.v[1]
-    const fb = evs[endIdx]!.v[1]
-    const oct = Math.log2(fb / fa)
-    const base = oct >= 0 ? fa : fb
-    // Strudel's envelope runs from F to F·2^|env|, reversed when env < 0, so the base is the lower end
-    // an event with no env value would get Strudel's default of +1 octave, so always write one
-    const env = `:${Math.abs(oct) < 0.001 ? '0.001' : oct.toFixed(3)}`
-    out.freq.push(w(String(Math.round(f0)), j - i))
-    out.bpf.push(w(`${Math.round(base)}:${q.toFixed(1)}${env}`, j - i))
-    out.att.push(w(((j - i) * step).toFixed(3), j - i))
-    out.gain.push(w(g.toFixed(3), j - i))
-    out.count++
+    out.push([i, j, on(i)])
     i = j
   }
-  return { freq: out.freq.join(' '), bpf: out.bpf.join(' '), att: out.att.join(' '), gain: out.gain.join(' '), count: out.count }
+  return out
+}
+
+const w = (x: string, k: number) => (Math.abs(k - 1) < 1e-9 ? x : `${x}@${+k.toFixed(2)}`)
+
+/**
+ * Event lengths (in slices, fractional) for a segmentation. When `align` is set, a voiced event
+ * that runs into another one is stretched or shrunk by under half a pitch period so it holds a
+ * whole number of glottal cycles. Strudel starts every event's oscillator at phase 0, so the next
+ * event then starts in phase with the one fading out instead of beating against it.
+ */
+function eventWeights(evs: Ev[], bounds: [number, number, boolean][], step: number, align: boolean): number[] {
+  const out: number[] = []
+  let pos = 0
+  bounds.forEach(([i, j, on], k) => {
+    let end = j
+    const next = bounds[k + 1]
+    if (on && align && next && next[2]) {
+      const p0 = Math.round(evs[i]!.v[0])
+      const semis = +(12 * Math.log2(evs[j]!.v[0] / evs[i]!.v[0])).toFixed(2)
+      const r = Math.pow(2, semis / 12)
+      // cycles in a pitch glide (linear in cents) from p0 to p0·r over D seconds: p0·D·(r−1)/ln r
+      const g = Math.abs(r - 1) < 1e-9 ? 1 : (r - 1) / Math.log(r)
+      const nominal = (j - pos) * step
+      const cycles = Math.max(1, Math.round(nominal * p0 * g))
+      end = pos + cycles / (p0 * g) / step
+      // never past the next event's own end
+      end = Math.min(end, next[1] - 0.5)
+    }
+    end = Math.round(end * 100) / 100
+    out.push(Math.round((end - pos) * 100) / 100)
+    pos = end
+  })
+  return out
+}
+
+/** the shared timing and pitch strings for a segmentation */
+function glideTiming(evs: Ev[], bounds: [number, number, boolean][], step: number, weights: number[]) {
+  const freq: string[] = []
+  const penv: string[] = []
+  const att: string[] = []
+  bounds.forEach(([i, j, on], k) => {
+    const wt = weights[k]!
+    if (!on) {
+      for (const a of [freq, penv, att]) a.push(w('~', wt))
+      return
+    }
+    const end = j < evs.length && evs[j]!.on ? j : j - 1
+    // start at the first slice's pitch and glide (linear in cents) to the next event's start
+    const p0 = evs[i]!.v[0]
+    freq.push(w(String(Math.round(p0)), wt))
+    penv.push(w((12 * Math.log2(evs[end]!.v[0] / p0)).toFixed(2), wt))
+    att.push(w((wt * step).toFixed(4), wt))
+  })
+  return { freq: freq.join(' '), penv: penv.join(' '), att: att.join(' ') }
+}
+
+/**
+ * A band-pass gliding from `from` Hz to `to` Hz over the event, as Strudel's `bpf("F:Q:env")`.
+ * Strudel's filter envelope runs from F to F·2^|env| and is reversed when env < 0, so F is always
+ * the lower end and the sign of env carries the direction (a downward glide is `to:Q:-octaves`).
+ * An event without an env value would get Strudel's default of +1 octave, so one is always written.
+ */
+export function bpfGlide(from: number, to: number, q: number): string {
+  const oct = Math.log2(to / from)
+  const base = oct >= 0 ? from : to
+  return `${Math.round(base)}:${q.toFixed(1)}:${Math.abs(oct) < 0.001 ? '0.001' : oct.toFixed(3)}`
+}
+
+/** one voiced layer's filter and gain strings for a segmentation */
+function glideFilter(evs: Ev[], bounds: [number, number, boolean][], weights: number[]) {
+  const bpf: string[] = []
+  const gain: string[] = []
+  for (const [k, [i, j, on]] of bounds.entries()) {
+    const wt = weights[k]!
+    if (!on) {
+      bpf.push(w('~', wt))
+      gain.push(w('~', wt))
+      continue
+    }
+    const end = j < evs.length && evs[j]!.on ? j : j - 1
+    const seg = evs.slice(i, j)
+    const g = seg.reduce((s2, e) => s2 + e.v[3], 0) / seg.length
+    const q = seg.reduce((s2, e) => s2 + e.v[2], 0) / seg.length
+    bpf.push(w(bpfGlide(evs[i]!.v[1], evs[end]!.v[1], q), wt))
+    gain.push(w(g.toFixed(3), wt))
+  }
+  return { bpf: bpf.join(' '), gain: gain.join(' ') }
 }
 
 const near = (a: number, b: number, r: number) => Math.abs(Math.log(a / b)) < r
 
-export function compileStrudelSpeech(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelSpeechOptions = {}): StrudelSpeech {
+/** The synthesiser's layers (10 ms slices, gains on the output scale), before they are written as code. */
+export function buildStrudelLayers(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelSpeechOptions = {}) {
   const T: Tune = { ...TUNE, ...opts.tune }
   const step = opts.step ?? 0.01
   const tail = opts.tail ?? 0.6
@@ -240,6 +334,7 @@ export function compileStrudelSpeech(plan: SpeechPlan, voice: SpeechVoice, opts:
   const nasalLayer: Ev[] = []
   const asp: Ev[][] = [[], []]
   const fric: Ev[][] = [[], [], []]
+  const bypass: Ev[] = []
   for (const s of slices) {
     const poles = s.f.map((f, k) => [f, s.b[k]!] as [number, number])
     // nasal pole/zero pair of the cascade (they cancel when the velum is closed)
@@ -259,62 +354,93 @@ export function compileStrudelSpeech(plan: SpeechPlan, voice: SpeechVoice, opts:
     for (let k = 0; k < 2; k++) {
       const F = s.f[k + 1]!
       const g = s.ah * cascadeGain(F, poles) * 0.02
-      asp[k]!.push({ on: s.ah > 0.02, v: [0, F, Math.max(2, F / s.b[k + 1]! / 2), g] })
+      asp[k]!.push({ on: s.ah > 0.02, v: [s.f0, F, Math.max(2, F / s.b[k + 1]! / 2), g] })
     }
+    // Klatt 1980: in voiced fricatives the turbulence pulses with the glottal cycle (the engine
+    // halves the noise while the glottis is closed); Strudel's tremolo at f0 does the same
+    const voicedMod = T.fricMod && s.av > 0.05 ? Math.min(0.5, s.av) : 0
     for (let k = 0; k < 3; k++) {
       const g = s.af * s.pg[k]!
-      fric[k]!.push({ on: s.af > 0.02 && s.pg[k]! > 0.01, v: [0, s.p[k]!, Math.max(1.5, s.p[k]! / s.pb[k]!), g] })
+      fric[k]!.push({ on: s.af > 0.02 && s.pg[k]! > 0.01, v: [s.f0, s.p[k]!, Math.max(1.5, s.p[k]! / s.pb[k]!), g], d: voicedMod })
     }
+    // Klatt's bypass path: flat frication noise above the front-cavity cut-off (bursts, /f θ h/)
+    bypass.push({ on: s.af > 0.02 && s.bypass > 0.01, v: [s.f0, Math.max(300, s.fhp), 0.7, s.af * s.bypass], d: voicedMod })
   }
-  // normalise voiced gains so the loudest formant layer peaks at 0.8
-  const vmax = Math.max(1e-9, ...voiced.flat().filter((e) => e.on).map((e) => e.v[3]))
+  // gains on a fixed scale (not per utterance), so a weak /f/ stays weaker than an /s/ elsewhere
+  const vmax = T.scale ? T.scale[0] : Math.max(1e-9, ...voiced.flat().filter((e) => e.on).map((e) => e.v[3]))
   for (const e of [...voiced.flat(), ...nasalLayer]) e.v[3] = (T.voicedGain * e.v[3]) / vmax
-  const amax = Math.max(1e-9, ...asp.flat().filter((e) => e.on).map((e) => e.v[3]))
+  const amax = T.scale ? T.scale[1] : Math.max(1e-9, ...asp.flat().filter((e) => e.on).map((e) => e.v[3]))
   for (const e of asp.flat()) e.v[3] = (T.aspGain * e.v[3]) / amax
-  const fmax = Math.max(1e-9, ...fric.flat().filter((e) => e.on).map((e) => e.v[3]))
-  for (const e of fric.flat()) e.v[3] = (T.fricGain * e.v[3]) / fmax
-  for (const l of [...voiced, nasalLayer, ...asp, ...fric]) for (let i = 0; i < pad; i++) l.push({ on: false, v: [0, 0, 0, 0] })
+  const fmax = T.scale ? T.scale[2] : Math.max(1e-9, ...[...fric.flat(), ...bypass].filter((e) => e.on).map((e) => e.v[3]))
+  for (const e of [...fric.flat(), ...bypass]) e.v[3] = (T.fricGain * e.v[3]) / fmax
+  // inaudible noise or murmur events cost voices and code: drop them
+  for (const e of [...nasalLayer, ...asp.flat(), ...fric.flat(), ...bypass]) if (e.v[3] < 5e-4) e.on = false
+  for (const l of [...voiced, nasalLayer, ...asp, ...fric, bypass]) for (let i = 0; i < pad; i++) l.push({ on: false, v: [0, 0, 0, 0] })
 
+  return { T, voiced, nasalLayer, asp, fric, bypass, realStep, seconds, slices }
+}
+
+export function compileStrudelSpeech(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelSpeechOptions = {}): StrudelSpeech {
+  const { T, voiced, nasalLayer, asp, fric, bypass, realStep, seconds, slices } = buildStrudelLayers(plan, voice, opts)
   const vt = (a: Ev['v'], b: Ev['v']) => near(a[0], b[0], T.f0Tol) && near(a[1], b[1], T.fTol) && Math.abs(Math.log(a[3] / b[3])) < 0.25
   const nt = (a: Ev['v'], b: Ev['v']) => near(a[1], b[1], 0.06) && Math.abs(Math.log(a[3] / b[3])) < 0.3
   const lines: string[] = []
   let events = 0
   const env = `.attack(${T.attack}).decay(0).sustain(1).release(${T.release})`
-  voiced.forEach((l, k) => {
-    const lp = T.lowpass > 0 ? `.lpf(${Math.round(Math.min(9000, T.lowpass * [700, 1800, 2800, 3600][k]!))})` : ''
-    const hp = T.highpass && k > 0 ? `.hpf(${[0, 750, 1500, 2500][k]})` : ''
-    if (T.glide) {
-      const x = glideLayer(l, realStep, T)
+  // noise starts sharply so stop bursts keep their transient
+  const envN = `.attack(${T.noiseAttack}).decay(0).sustain(1).release(${T.release})`
+  const preamble: string[] = []
+  if (T.glide) {
+    const bounds = glideBounds(voiced, realStep, T)
+    const weights = eventWeights(voiced[0]!, bounds, realStep, T.align)
+    const t = glideTiming(voiced[0]!, bounds, realStep, weights)
+    events += 4 * bounds.filter((b) => b[2]).length
+    preamble.push(`const f0 = "${t.freq}"`, `const glide = "${t.penv}"`, `const len = "${t.att}"`)
+    // one sawtooth per formant, all restarting together; pitch and filter glide over each event
+    preamble.push('const tract = (f, g) => freq(f0).s("sawtooth").penv(glide).pattack(len).panchor(0).psustain(1).prelease(10)\n  .bpf(f).bpattack(len).bpdecay(0).bpsustain(1).bprelease(10).gain(g)' + env)
+    voiced.forEach((l, k) => {
+      const x = glideFilter(l, bounds, weights)
+      const lp = T.lowpass > 0 ? `.lpf(${Math.round(Math.min(9000, T.lowpass * [700, 1800, 2800, 3600][k]!))})` : ''
+      const hp = T.highpass && k > 0 ? `.hpf(${[0, 750, 1500, 2500][k]})` : ''
+      lines.push(`  // F${k + 1}\n  tract("${x.bpf}", "${x.gain}")${lp}${hp}`)
+    })
+  } else
+    voiced.forEach((l, k) => {
+      const x = layer(l, vt)
       events += x.count
-      lines.push(`  // F${k + 1}\n  freq("${x.freq}").s("sawtooth")\n    .bpf("${x.bpf}").bpattack("${x.att}").bpdecay(0).bpsustain(1).bprelease(10)${lp}${hp}\n    .gain("${x.gain}")${env}`)
-      return
-    }
-    const x = layer(l, vt)
-    events += x.count
-        lines.push(`  // F${k + 1}\n  freq("${x.freq}").s("sawtooth").bpf("${x.bpf}")${lp}${hp}.gain("${x.gain}")${env}`)
-  })
+      const lp = T.lowpass > 0 ? `.lpf(${Math.round(Math.min(9000, T.lowpass * [700, 1800, 2800, 3600][k]!))})` : ''
+      const hp = T.highpass && k > 0 ? `.hpf(${[0, 750, 1500, 2500][k]})` : ''
+      lines.push(`  // F${k + 1}\n  freq("${x.freq}").s("sawtooth").bpf("${x.bpf}")${lp}${hp}.gain("${x.gain}")${env}`)
+    })
   if (nasalLayer.some((e) => e.on)) {
     const x = layer(nasalLayer, vt)
     events += x.count
     lines.push(`  // nasal murmur\n  freq("${x.freq}").s("sawtooth").bpf("${x.bpf}").lpf(800).gain("${x.gain}")${env}`)
   }
   asp.forEach((l, k) => {
-    const x = layer(l, nt)
+    const x = layer(l, nt, true)
     if (!x.count) return
     events += x.count
-    lines.push(`  // aspiration through F${k + 2}\n  s("${x.freq.replace(/\b0\b/g, 'white')}").bpf("${x.bpf}").gain("${x.gain}")${env}`)
+    lines.push(`  // aspiration through F${k + 2}\n  s("${x.freq}").bpf("${x.bpf}").gain("${x.gain}")${envN}`)
   })
   fric.forEach((l, k) => {
-    const x = layer(l, nt)
+    const x = layer(l, nt, true)
     if (!x.count) return
     events += x.count
-    lines.push(`  // frication band ${k + 1}\n  s("${x.freq.replace(/\b0\b/g, 'white')}").bpf("${x.bpf}").gain("${x.gain}")${env}`)
+    const tr = x.trem
+    lines.push(`  // frication band ${k + 1}\n  s("${x.freq}").bpf("${x.bpf}")${tr}.gain("${x.gain}")${envN}`)
   })
+  if (T.bypass && bypass.some((e) => e.on)) {
+    const x = layer(bypass, nt, true)
+    events += x.count
+    const tr = x.trem
+    lines.push(`  // frication bypass (flat, above the front-cavity cut-off)\n  s("${x.freq}").hpf("${x.bpf}")${tr}.gain("${x.gain}")${envN}`)
+  }
   const header = [
     `// "${(opts.text ?? '').replace(/\s+/g, ' ').trim()}" — spoken by Strudel itself: oscillators, noise and formant filters`,
     `// Continuous-Tunes speech (voice ${voice.id}), ${slices.length} slices of ${Math.round(realStep * 1000)} ms, ${events} events per cycle`,
     `setcps(${(1 / seconds).toFixed(4)})`,
   ]
-  const code = `${header.join('\n')}\nstack(\n${lines.join(',\n')}\n)\n`
+  const code = `${[...header, ...preamble].join('\n')}\nstack(\n${lines.join(',\n')}\n)\n`
   return { code, seconds, events }
 }
