@@ -201,13 +201,13 @@ with every measurement, so **Alder now uses the fitted prosody** (`prosody: 'fit
 Copy Strudel. `alder-klatt` keeps the hand-set prosody for comparisons; `alder-m1` is unchanged
 (voice hash `e6959a8e`). Birch and Cedar keep their accent size relative to Alder.
 
-### Stage 4: consonants and voicing (no change adopted)
+### Stage 4: consonants and voicing
 
 The goal was clearer stops (p/b, t/d, k/g) and fricative voicing (s/z, f/v, θ/ð, with sue/zoo as
-the key pair). None of the fourteen variants beat V1 both on the recognisers and by ear, so **the
-instrument is unchanged**. The tools and this record remain. Every variant is reproducible from
-commits 3026ec7 (release events, voice bar, voiced-frication modulation) and 27e6ad0 (recorded
-snippets, aspiration and sibilant-voicing switches) on this branch.
+the key pair). **Adopted: R6**, recorded stop releases 6 dB quieter than R5 (`DEFAULT_CONSONANTS`
+in `consonants.ts`; `V1_CONSONANTS` turns every switch off). Reuben then made Whisper the judge,
+over his own ears (see the end of this section). Every other variant is still selectable through
+`ConsonantSettings`, so each one can be reproduced.
 
 **Diagnosis.** `consonant-measure.py` measures the same acoustics in the CMU ARCTIC awb recordings
 and in our renders of the same held-out prompts (b0300–b0539, aligned phones, Praat via
@@ -257,6 +257,19 @@ rated the same. Measured afterwards, R5's "bat" release peaks 9 dB above the vow
 (the calibration caveat above). The snippets also stop at 8 kHz, because the recordings are at
 16 kHz. The recognisers tolerate a pop that a listener does not.
 
+**Whisper as judge (R6 adopted).** Reuben then decided to trust Whisper over his ears, and to
+drop the other recognisers. R6 lowers the recorded releases by 6 dB (`recBurst` 0.01), which
+also softens R5's pop. Three benchmark runs of each, recorded in real Strudel, scored by Whisper only:
+
+| | Whisper small WER | Whisper base WER | Diagnostic words (small) | Minimal pairs (small) |
+|---|---|---|---|---|
+| V1 | 16.7% | 17.3% | 46% | 51% |
+| R5 | 18.0% | 19.0% | 53% | 53% |
+| **R6** | 17.0% | 16.7% | **53%** | **56%** |
+
+R6 keeps sentence WER level, within the run-to-run noise, and gains on the consonant tests, so it
+is the default.
+
 **What we learned**
 
 - Matching the speaker's acoustics one measure at a time does not help on its own. Darker
@@ -264,11 +277,11 @@ rated the same. Measured afterwards, R5's "bat" release peaks 9 dB above the vow
   /s/ (peak near 6 kHz) was tuned in M3 because recognisers heard a darker one as /ʃ/. The cues
   interact: a darker /s/ needs the formant transitions that go with it.
 - Voicing during z was not what the recognisers missed: more voicing (Z2, E3) lost z words.
-- Recognisers and a listener can disagree in sign. Any later consonant change goes to a paired
-  listening test before it is adopted. The recognisers only screen variants.
+- Recognisers and a listener can disagree in sign: Whisper preferred R5, and Reuben's blind test
+  preferred V1. Reuben chose Whisper as the judge.
 - Recorded material inside Strudel works technically. The worklet decodes base64 mu-law snippets
-  in an AudioWorkletGlobalScope (no `atob` there) and played them in real Strudel. That path can be
-  revived from 27e6ad0, but it needs full-band recordings and a burst level set by ear.
+  in an AudioWorkletGlobalScope (no `atob` there) and played them in real Strudel. The recordings stop at
+  8 kHz, so a full-band source would help.
 
 Reproduce:
 
@@ -309,7 +322,7 @@ measurably help.
 | V0 ✓ | Fixed corpus, baselines, renderer, scorer | Numbers above |
 | V1 ✓ | Continuous instrument (LF source + formant tract) | 54.4% → 28.7% WER |
 | V2 (experiment) | Articulatory planner: Story-style area functions, gestures with target approximation. Two tracts compared in the worklet: Kelly–Lochbaum waveguide, and formants computed from the area function | Corpus WER, blind A/B, CPU |
-| V3 (stage 4, nothing adopted) | Consonants: release bursts, voice bar, VOT, fricative voicing, recorded snippets (see Stage 4) | Minimal pairs, then a paired listening test |
+| V3 (stage 4) ✓ | Consonants: recorded stop releases adopted (R6); voice bar, VOT, fricative voicing tried (see Stage 4) | Whisper: benchmark, diagnostic words, minimal pairs |
 | V4 (stage 3, first pass done) | Prosody: qTA pitch targets, stress affecting duration, Rd and articulation; question and statement contours | Blind A/B, F0 against recordings |
 | V5 | Optimisation against recordings (mel and formant distance, evolutionary search) | Held-out ARCTIC prompts |
 
