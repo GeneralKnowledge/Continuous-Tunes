@@ -85,7 +85,24 @@ export const V1_CONSONANTS: ConsonantSettings = {
   recBurst: 0.02,
 }
 
-export const DEFAULT_CONSONANTS: ConsonantSettings = V1_CONSONANTS
+/**
+ * The default since 4 Nov 2026: stop releases as sample-accurate events playing short recorded
+ * releases (CMU ARCTIC awb) in place of the frame-rate burst, at recBurst 0.01 (6 dB under the
+ * level matched to the recordings). Judged by Whisper, as Reuben chose: benchmark WER level with V1
+ * over three real-Strudel runs (small 17.0% vs 16.7%, base 16.7% vs 17.3%), diagnostic words
+ * 46% → 53% (small), minimal pairs 51% → 56% (small). docs/speech/strudel-voice.md, Stage 4.
+ */
+export const DEFAULT_CONSONANTS: ConsonantSettings = {
+  ...V1_CONSONANTS,
+  bursts: true,
+  replace: true,
+  labial: [2.5, 2.5],
+  alveolar: [1.0, 4],
+  velar: [1.2, 6],
+  postalveolar: [0.6, 4],
+  recorded: true,
+  recBurst: 0.01,
+}
 
 const PLACE: Record<string, 'labial' | 'alveolar' | 'velar' | 'postalveolar'> = {
   p: 'labial', b: 'labial', t: 'alveolar', d: 'alveolar', k: 'velar', g: 'velar', tʃ: 'postalveolar', dʒ: 'postalveolar',
