@@ -60,6 +60,30 @@ describe('Strudel voice instrument', () => {
     expect(peak).toBeLessThan(1)
   })
 
+  it('has an experimental waveguide engine that runs from articulation alone', () => {
+    const tract = compileStrudelVoice(plan, voice, { text: 'x', engine: 'tract' })
+    const src = processorSource('t', 'tract')
+    let Proc: (new (o: unknown) => { process(i: unknown, o: Float32Array[][]): boolean }) | null = null
+    const scope = { sampleRate: 48000, currentFrame: 0, AudioWorkletProcessor: class { port = { postMessage: () => {} } }, registerProcessor: (_n: string, c: never) => (Proc = c) }
+    new Function('globalThis', ...Object.keys(scope), src)(scope, ...Object.values(scope))
+    const track = tract.code.match(/const speech = \['([^']*)'\]/)![1]!
+    const settings = new Function(`return ${tract.code.match(/const settings = (\{[^\n]*\})/)![1]}`)()
+    const p = new Proc!({ processorOptions: { ...settings, start: 0, track } })
+    let peak = 0
+    let n = 0
+    for (; n < 48000 * 5; n += 128) {
+      scope.currentFrame = n
+      const buf = new Float32Array(128)
+      const alive = p.process([], [[buf]])
+      for (const v of buf) peak = Math.max(peak, Math.abs(v))
+      if (!alive) break
+    }
+    expect(n / 48000).toBeGreaterThan(plan.duration - 0.05)
+    expect(n / 48000).toBeLessThan(plan.duration + 0.1)
+    expect(peak).toBeGreaterThan(0.02)
+    expect(Number.isFinite(peak)).toBe(true)
+  })
+
   it('fits tracks with straight lines inside the tolerance', () => {
     const v = [0, 1, 2, 3, 10, 10, 10, 5]
     const bp = breakpoints(v, () => 0.01)

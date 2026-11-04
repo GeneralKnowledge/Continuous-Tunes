@@ -13,6 +13,8 @@ import type { SpeechVoice } from '../../voice'
 import { buildFrames } from '../../backends/formant'
 import type { SynthFrame } from '../../backends/formant/klatt'
 import { voiceProcessorModule } from './processor'
+import { tractProcessorModule } from './tract-processor'
+import { buildArticulation, type ArticFrame } from './articulation'
 
 const FRAME = 0.005
 
@@ -53,6 +55,9 @@ const TOL: Record<Key, (v: number) => number> = {
 
 export interface StrudelVoiceOptions {
   text?: string
+  /** 'formant': Klatt-style resonators driven by formant tracks (V1); 'tract': a Kelly-Lochbaum
+   *  waveguide driven by articulation (V2) */
+  engine?: 'formant' | 'tract'
   /** silence after the utterance before the pattern repeats, seconds (default 0.6) */
   tail?: number
   /** output level inside Strudel, before Strudel's own gain (default 6) */
@@ -122,14 +127,26 @@ export function breakpoints(v: ArrayLike<number>, tol: (x: number) => number): n
   return out
 }
 
-/** Encode the frames as the processor's track string. */
+/** One parameter as breakpoints "v" or "d:v" (d frames after the previous breakpoint), integers. */
+function encodeLine(raw: readonly number[], sc: number, tol: (x: number) => number): string {
+  const v = raw.map((x) => Math.round(x * sc) / sc)
+  const bp = breakpoints(v, tol)
+  return bp.map((i, j) => (j === 0 || i - bp[j - 1]! === 1 ? `${Math.round(v[i]! * sc)}` : `${i - bp[j - 1]!}:${Math.round(v[i]! * sc)}`)).join(' ')
+}
+
+/** Encode formant frames as the formant processor's track string. */
 export function encodeTrack(frames: readonly SynthFrame[], rd: number): string {
-  return TRACK_KEYS.map((k) => {
-    const sc = SCALE[k] ?? 1
-    const v = frames.map((f) => Math.round(value(f, k, rd) * sc) / sc)
-    const bp = breakpoints(v, TOL[k])
-    return bp.map((i, j) => (j === 0 ? `${Math.round(v[i]! * sc)}` : i - bp[j - 1]! === 1 ? `${Math.round(v[i]! * sc)}` : `${i - bp[j - 1]!}:${Math.round(v[i]! * sc)}`)).join(' ')
-  }).join('|')
+  return TRACK_KEYS.map((k) => encodeLine(frames.map((f) => value(f, k, rd)), SCALE[k] ?? 1, TOL[k])).join('|')
+}
+
+/** order and integer scale must match tract-processor.ts */
+export const ARTIC_KEYS = ['f0', 'av', 'ah', 'rd', 'q1', 'q2', 'q3', 'ql', 'i1', 'd1', 'a1', 'w1', 'i2', 'd2', 'a2', 'w2', 'i3', 'd3', 'a3', 'w3', 'lt', 'la', 've', 'ti', 'td', 'tn'] as const
+const ARTIC_SCALE: Record<string, number> = { f0: 10, av: 1000, ah: 1000, rd: 100, q1: 1000, q2: 1000, q3: 1000, ql: 1000, i1: 10, d1: 100, a1: 1000, w1: 100, i2: 10, d2: 100, a2: 1000, w2: 100, i3: 10, d3: 100, a3: 1000, w3: 100, lt: 100, la: 1000, ve: 1000, ti: 10, td: 100, tn: 1000 }
+const ARTIC_TOL: Record<string, (v: number) => number> = { f0: () => 0.6, q1: () => 0.01, q2: () => 0.01, q3: () => 0.01, ql: () => 0.01, i1: () => 0.05, i2: () => 0.05, i3: () => 0.05, ti: () => 0.05, d1: () => 0.01, d2: () => 0.01, d3: () => 0.01, td: () => 0.01, lt: () => 0.01, ve: () => 0.004 }
+
+/** Encode articulation frames as the tract processor's track string. */
+export function encodeArticulation(frames: readonly ArticFrame[]): string {
+  return ARTIC_KEYS.map((k) => encodeLine(frames.map((f) => f[k]), ARTIC_SCALE[k] ?? 1, ARTIC_TOL[k] ?? (() => 0.012))).join('|')
 }
 
 /** single-quoted JS string literal (Strudel reads double quotes and backticks as mini-notation) */
@@ -143,31 +160,33 @@ function hash(s: string): string {
 }
 
 /** The instrument's worklet source, as loaded by the program. */
-export function processorSource(name: string): string {
+export function processorSource(name: string, engine: 'formant' | 'tract' = 'formant'): string {
+  const mod = engine === 'tract' ? tractProcessorModule : voiceProcessorModule
   // __name: esbuild's keepNames helper (tsx, dev builds) is referenced from inside the function
-  return `var __name = (f) => f;\n(${voiceProcessorModule.toString()})('${name}')`.replace(/[^\t\n\x20-\x7e]/g, '?')
+  return `var __name = (f) => f;\n(${mod.toString()})('${name}')`.replace(/[^\t\n\x20-\x7e]/g, '?')
 }
 
 export function compileStrudelVoice(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelVoiceOptions = {}): StrudelVoice {
-  const frames = buildFrames(plan, voice, 48000)
+  const engine = opts.engine ?? 'formant'
   const tail = opts.tail ?? 0.6
   const seconds = plan.duration + tail
-  const track = encodeTrack(frames, voice.source.rd)
-  const src0 = processorSource('NAME')
-  const name = `ct-voice-${hash(src0)}`
-  const src = processorSource(name)
-  const settings = {
+  const track = engine === 'tract' ? encodeArticulation(buildArticulation(plan, voice)) : encodeTrack(buildFrames(plan, voice, 48000), voice.source.rd)
+  const src0 = processorSource('NAME', engine)
+  const name = `ct-${engine}-${hash(src0)}`
+  const src = processorSource(name, engine)
+  const common = {
     frameSeconds: FRAME,
     rd: voice.source.rd,
     jitter: voice.source.jitter,
     shimmer: voice.source.shimmer,
     breath: voice.source.breathiness,
-    tilt: 0.6 * Math.min(1, Math.max(0, voice.source.spectralTilt)),
     flutter: voice.source.flutter,
-    gain: opts.gain ?? 6,
-    scale: voice.tract.formantScale,
     seed: opts.seed ?? 1,
   }
+  const settings =
+    engine === 'tract'
+      ? { ...common, gain: opts.gain ?? 0.15, tractRate: 88200 * voice.tract.formantScale, burst: 0.3 * voice.articulation.consonantStrength, wall: 0, fricLp: 0.35 }
+      : { ...common, tilt: 0.6 * Math.min(1, Math.max(0, voice.source.spectralTilt)), gain: opts.gain ?? 6, scale: voice.tract.formantScale }
   const header = opts.text ? `// "${opts.text.replace(/\n/g, ' ')}": spoken by Strudel itself\n` : ''
   const code = `${header}// Continuous-Tunes voice instrument (${voice.id}): a glottal source and vocal tract running inside
 // Strudel as a registered sound, one continuous voice per utterance. Paste into strudel.cc.
