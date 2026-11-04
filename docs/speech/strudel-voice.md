@@ -150,9 +150,16 @@ is not a naturalness measure, so the decision waits for the listening test.
 patterns, V1, V1 with expression and the waveguide, plus the real recording as a hidden reference,
 scored 0–100 for naturalness (`scripts/speech/listen-multi.py`; page and audio in project files,
 `recordings/speech/strudel-voice/listening-test/`). Reuben's result (4 Nov 2026): the recording was
-obvious (100); V1 and V1 with expression could not be told apart; PR #19 patterns (about 30) and the
+obvious (100); V1 and V1 with expression were too close to separate among five clips of the same
+sentence (not a verdict on expression, which gets its own paired test, `scripts/speech/ab-dirs.py`); PR #19 patterns (about 30) and the
 waveguide (about 28) were the worst two. Scoring five clips 0–100 was too hard to be meaningful, so
-future tests are paired A/B preference between two versions. Expression stays off by default.
+future tests are paired A/B preference between two versions. The paired test (16 sentences, V1 against V1 with expression, `scripts/speech/ab-dirs.py`) came out
+even: 4 for expression, 4 for V1, 8 the same. Expression won short conversational sentences and
+questions (conv-02, conv-04, q-03, q-05); V1 won the long passage and two held-out sentences
+(long-01, arctic_b0494, arctic_b0506) and conv-03. The layer is too subtle to help on its own,
+and may hurt longer sentences, where the repeated phrase-end relaxation and quieter unstressed
+vowels add up. Expression stays off by default; it is worth revisiting once pitch is closer to
+natural, because voice quality follows the intonation it decorates.
 
 ## Research: what to borrow
 
