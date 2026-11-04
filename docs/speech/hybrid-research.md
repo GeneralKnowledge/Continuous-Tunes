@@ -156,8 +156,26 @@ Readings:
 
 [Listening test](https://claude.ai/artifact/FyZ9vT6Neq1gbK27jjo9QF) (also in project files,
 `recordings/speech/hybrid/listening-test/index.html`): 8 held-out sentences, six engines and the
-real recording in random order per sentence, levels matched, scored 0–100. Results to be added
-here once listened to; the test is part of the keep/reject evidence for H1.
+real recording in random order per sentence, levels matched, scored 0–100.
+
+First listener (Reuben, 2026-11-04), mean of 8 sentences:
+
+| Version | Mean score | Range |
+|---|---|---|
+| Natural recording | 99.3 | 94–100 |
+| MBROLA `en1` | **75.8** | 34–88 |
+| Formant (current) | 36.5 | 23–51 |
+| VocalTractLab | 34.6 | 18–50 |
+| Formant + recorded excitation 0.5 | 33.1 | 23–54 |
+| Articulatory tract | 24.1 | 18–33 |
+| Own diphones (ARCTIC awb) | 14.6 | 5–38 |
+
+The listener agrees with the recognisers: recorded diphones are far ahead (MBROLA is preferred
+over the formant engine on all 8 sentences). This satisfies the blind-test half of H1's keep
+criterion. Recorded excitation is not a perceived improvement, so H6 stays low priority. Our own
+diphones rank last: naive one-best selection from automatic alignment is clearly audible, which
+is the problem H3 addresses. The natural recording is still obvious, consistent with shared
+prosody being the common gap (H5).
 
 ## 5. Architecture decision
 
