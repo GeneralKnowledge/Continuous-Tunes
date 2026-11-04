@@ -7,6 +7,7 @@ import type { Lexicon } from '../speech/lexicon'
 import { planMetrics } from '../speech/metrics'
 import { compileStrudelSpeech } from '../speech/strudel/compile'
 import { compileStrudelVoice } from '../speech/strudel/instrument/compile'
+import { neuralStrudelCode } from '../speech/neural/strudel-neural'
 import { formatPronunciation } from '../speech/phonemes'
 import { PAUSE, type SpeechPlan } from '../speech/plan'
 import {
@@ -85,6 +86,7 @@ export function SpeechPanel() {
   const resultKey = useRef('')
   const [strudel, setStrudel] = useState<{ key: string; code: string } | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [neuralBusy, setNeuralBusy] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -184,6 +186,30 @@ export function SpeechPanel() {
     }
   }
 
+  async function copyNeural() {
+    if (!lexicon || !settings.text.trim()) return
+    const key = JSON.stringify(settings)
+    setNeuralBusy(true)
+    setCopied('Loading the neural voice (about 120 MB, first time only)…')
+    setStrudel({ key, code: '' })
+    try {
+      const { code } = await neuralStrudelCode(settings.text, lexicon, { base: `${import.meta.env.BASE_URL}models/`, speed: settings.rate })
+      setStrudel({ key, code })
+      try {
+        await navigator.clipboard.writeText(code)
+        setCopied('Copied: paste it into strudel.cc and press play')
+      } catch {
+        setCopied('Ready: select the code below and copy it')
+      }
+    } catch (e) {
+      setCopied(null)
+      setStrudel(null)
+      setError(`Neural voice: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setNeuralBusy(false)
+    }
+  }
+
   const metrics = result ? planMetrics(result.plan) : null
   const stats = lexicon?.stats()
 
@@ -258,6 +284,13 @@ export function SpeechPanel() {
         </button>
         <button onClick={downloadWav} disabled={!lexicon || !settings.text.trim()}>
           Download WAV
+        </button>
+        <button
+          onClick={() => void copyNeural()}
+          disabled={!lexicon || !settings.text.trim() || neuralBusy}
+          title="Strudel code that speaks this text with a neural British voice (Kokoro, run in your browser). The speech is rendered here and carried inside the code as compressed audio, which Strudel decodes and plays as a registered sound. The rate slider sets the speed; pitch and voice presets do not apply."
+        >
+          {neuralBusy ? 'Rendering neural voice…' : 'Copy Strudel neural voice'}
         </button>
         <button
           onClick={() => void copyStrudel('instrument')}

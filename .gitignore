@@ -28,3 +28,6 @@ dist-ssr
 speech-benchmark/
 speech-out/
 __pycache__/
+
+# Neural voice assets (scripts/speech/neural/fetch-kokoro.sh)
+public/models/kokoro/

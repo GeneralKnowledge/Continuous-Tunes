@@ -201,6 +201,90 @@ with every measurement, so **Alder now uses the fitted prosody** (`prosody: 'fit
 Copy Strudel. `alder-klatt` keeps the hand-set prosody for comparisons; `alder-m1` is unchanged
 (voice hash `e6959a8e`). Birch and Cedar keep their accent size relative to Alder.
 
+### Stage 4: consonants and voicing (no change adopted)
+
+The goal was clearer stops (p/b, t/d, k/g) and fricative voicing (s/z, f/v, θ/ð, with sue/zoo as
+the key pair). None of the fourteen variants beat V1 both on the recognisers and by ear, so **the
+instrument is unchanged**. The tools and this record remain. Every variant is reproducible from
+commits 3026ec7 (release events, voice bar, voiced-frication modulation) and 27e6ad0 (recorded
+snippets, aspiration and sibilant-voicing switches) on this branch.
+
+**Diagnosis.** `consonant-measure.py` measures the same acoustics in the CMU ARCTIC awb recordings
+and in our renders of the same held-out prompts (b0300–b0539, aligned phones, Praat via
+parselmouth for voicing). Stop rows are tokens before a vowel.
+
+| Measure | Speaker | V1 |
+|---|---|---|
+| VOT, p / t / k (ms) | 29 / 25 / 29 | 38 / 36 / 54 |
+| Closure voicing, b / d / g (share of voiced frames) | 0.62 / 0.81 / 0.79 | 1.00 / 1.00 / 1.00 |
+| Burst level, p / b (dB, see caveat) | −1.5 / −2.4 | −17.5 / −15.9 |
+| Burst centroid, t / d (Hz) | 2624 / 1908 | 5412 / 5440 |
+| Fricative centroid, s / z / f / ʃ (Hz) | 3794 / 3465 / 2942 / 2726 | 6557 / 6559 / 5059 / 4133 |
+| Level of v / ð (dB) | −15.6 / −15.1 | −8.3 / −8.7 |
+| Voiced share of z (Praat) | 0.25 | 0.00 |
+
+So V1's bursts are weak and smeared by the 5 ms frames, its aspiration is long, its closures are
+fully voiced, its frication is far brighter than the speaker's, and v/ð are too loud. Caveat: the
+burst level is the peak in a short window after the release, which in voiced stops already
+includes the vowel onset, so the speaker's figures overstate the burst itself.
+
+**Minimal-pair corpus.** `consonant-corpus.ts` has 20 pairs (pat/bat … sue/zoo, thigh/thy,
+cheap/jeep), each as an isolated word, in the carrier "Say X again." and in a sentence: 126 items.
+The scores are the share of target words heard by the four recognisers (`pairs-eval.py`), and a
+forced choice between the target and its partner with the CTC model (`pairs-ctc.py`). The CTC
+choice stayed at 56% ± 1 for every variant, so it doesn't tell them apart. The
+transcript scores below are the useful ones (V1: 40% overall, 24% on isolated words).
+
+| Variant (one change at a time unless stated) | Targets heard | Isolated words | s/z |
+|---|---|---|---|
+| V1 | 40% | 24% | 44% |
+| E1: releases as sample-accurate events (transient + place-dependent decay), level matched to the speaker | 40–41% | 23–24% | 46–48% |
+| E2: + closure voicing low-passed (voice bar only) | 39% | 23% | 47% |
+| E3: + voiced fricatives constricted and glottally pulsed | 34% | 21% | 35% |
+| E3b: E3 with weaker v/ð voicing | 34% | 21% | 37% |
+| R1–R3: recorded awb turbulence and releases played in the worklet (levels trimmed to the speaker; R3 high-passed) | 34–37% | 16–18% | 12–22% |
+| R4: recorded releases only | 43% | 26% | 48% |
+| R5: recorded releases replacing the frame-rate burst | **45%** | **28%** | 48% |
+| A35: p/t/k aspiration 55 → 35 ms (VOT now near the speaker's) | 38% | 21% | 44% |
+| Z1: z/v frication pulsed by the glottis (depth 0.8) | 40% | 23% | 45% |
+| Z2: z voicing × 2.5 | 40% | 24% | 40% |
+
+R5 was the only clear gain for the recognisers. On the 114-item benchmark in real Strudel it scored
+24.6% WER against 23.3% (one run; the run-to-run noise is about 1.5), with diagnostic accuracy
+38.9% against 35.6% and final voicing 46% against 21%. **Reuben's blind paired test** ("which says
+the word more clearly", 8 carrier items, `ab-dirs.py --ask clear`) went **6–0 for V1**, with zoo
+rated the same. Measured afterwards, R5's "bat" release peaks 9 dB above the vowel that follows
+(the calibration caveat above). The snippets also stop at 8 kHz, because the recordings are at
+16 kHz. The recognisers tolerate a pop that a listener does not.
+
+**What we learned**
+
+- Matching the speaker's acoustics one measure at a time does not help on its own. Darker
+  frication (R1–R3) and natural VOT (A35) both moved V1 towards the speaker and both lost words. V1's bright
+  /s/ (peak near 6 kHz) was tuned in M3 because recognisers heard a darker one as /ʃ/. The cues
+  interact: a darker /s/ needs the formant transitions that go with it.
+- Voicing during z was not what the recognisers missed: more voicing (Z2, E3) lost z words.
+- Recognisers and a listener can disagree in sign. Any later consonant change goes to a paired
+  listening test before it is adopted. The recognisers only screen variants.
+- Recorded material inside Strudel works technically. The worklet decodes base64 mu-law snippets
+  in an AudioWorkletGlobalScope (no `atob` there) and played them in real Strudel. That path can be
+  revived from 27e6ad0, but it needs full-band recordings and a burst level set by ear.
+
+Reproduce:
+
+```
+npx tsx scripts/speech/pairs-items.ts pairs.json
+npx tsx scripts/speech/render-offline.ts <dir> pairs.json            # same worklet DSP, offline
+python3 scripts/speech/asr_whisper.py <dir> <models…>
+python3 scripts/speech/pairs-eval.py pairs.json <dir>
+python3 scripts/speech/pairs-ctc.py pairs.json <dir>
+python3 scripts/speech/consonant-measure.py natural ~/research/awb/wav ~/research/awb-align --ids b0300-b0539 > natural.json
+npx tsx scripts/speech/render-offline.ts <dir> arctic:b0300-b0539 && python3 scripts/speech/consonant-measure.py synth <dir> > synth.json
+python3 scripts/speech/consonant-measure.py compare natural.json synth.json
+```
+
+`render-offline.ts` takes `ARTIC='{"aspirationMs":35}'` to patch the voice's articulation.
+
 ## Research: what to borrow
 
 The question for each source was what can run inside a worklet, be driven by our planner, and
@@ -225,7 +309,7 @@ measurably help.
 | V0 ✓ | Fixed corpus, baselines, renderer, scorer | Numbers above |
 | V1 ✓ | Continuous instrument (LF source + formant tract) | 54.4% → 28.7% WER |
 | V2 (experiment) | Articulatory planner: Story-style area functions, gestures with target approximation. Two tracts compared in the worklet: Kelly–Lochbaum waveguide, and formants computed from the area function | Corpus WER, blind A/B, CPU |
-| V3 | Consonants from the tract: closure, pressure build-up and release burst, turbulence at the constriction, voice bar, VOT | Consonant and diagnostic scores |
+| V3 (stage 4, nothing adopted) | Consonants: release bursts, voice bar, VOT, fricative voicing, recorded snippets (see Stage 4) | Minimal pairs, then a paired listening test |
 | V4 (stage 3, first pass done) | Prosody: qTA pitch targets, stress affecting duration, Rd and articulation; question and statement contours | Blind A/B, F0 against recordings |
 | V5 | Optimisation against recordings (mel and formant distance, evolutionary search) | Held-out ARCTIC prompts |
 
