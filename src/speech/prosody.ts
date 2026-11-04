@@ -155,7 +155,7 @@ export function planProsody(utt: Utterance, voice: SpeechVoice): SpeechPlan {
       const totalSyllables = phrase.words.reduce((n, w) => n + w.syllables.length, 0)
       phrase.words.forEach((w, wi) => {
         const wordIndex = words.length + wi
-        const accentable = !w.isFunction || w.emphasis
+        const accentable = (!w.isFunction || w.emphasis) && !w.deaccent
         w.syllables.forEach((syl, si) => {
           const phones = syllablePhones(syl)
           phones.forEach((ph, pi) => {
