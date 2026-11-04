@@ -161,6 +161,46 @@ and may hurt longer sentences, where the repeated phrase-end relaxation and quie
 vowels add up. Expression stays off by default; it is worth revisiting once pitch is closer to
 natural, because voice quality follows the intonation it decorates.
 
+### Stage 3: prosody fitted to recorded speech
+
+The prosody model (`prosody.ts`) is now parameterised: Klatt's duration table and rule factors and
+the tune's shape constants live in a `ProsodyModel`. `KLATT_MODEL` keeps the old values exactly,
+so existing voices (and `alder-m1`) are unchanged. `scripts/speech/fit-prosody.ts` fits a model to
+the aligned CMU ARCTIC awb prompts (`corpus/extract-prosody.py`: phone timings from our
+synthesis-based alignment plus a Praat pitch track):
+
+- durations: coordinate descent on the log ratio of predicted to natural phone durations, with a
+  weak pull towards Klatt's values;
+- tune: the plan is laid on the *natural* timing (`ProsodyOptions.timing`), so only pitch is
+  judged; minimises mean-removed semitone error over voiced frames.
+
+1086 prompts train the fit and the 52 from `arctic_b0490` are held out. The result is
+`src/speech/prosody-fitted.ts`, used by Alder (see below). The fit makes accents
+smaller (1.7 semitones instead of 4) with early peaks, prenuclear accents as large as the nucleus,
+a steeper decline and a much deeper final fall (6.8 semitones), and slows speech by about 10%.
+
+| Held-out ARCTIC, rendered through Strudel (V1) | Current | Fitted |
+|---|---|---|
+| F0 correlation with the speaker | 0.42 | **0.74** |
+| F0 RMSE, cents (mean removed) | 235 | **177** |
+| Duration ratio (synthetic / natural) | 0.87 | **0.96** |
+| Voicing agreement | 79% | 81% |
+| MCD, dB | **73.2** | 74.4 |
+
+| 114-item benchmark | Whisper base | Whisper small | Citrinet | Zipformer | Mean WER | Diagnostic accuracy |
+|---|---|---|---|---|---|---|
+| V1, current prosody | 19% | 17% | 44% | 35% | 28.7% | 33.7% |
+| V1, fitted prosody | 18% | 15% | 30% | 30% | **23.3%** | 35.6% |
+
+The fitted contour moves more than the hand-set one (standard deviation 1.76 against 1.45
+semitones; the speaker's is 2.5), so the gain is not from flattening. Caveats: one speaker, who is
+Scottish, reading isolated sentences; alignment boundaries are 15–30 ms off, which limits the
+duration fit (log RMS error 0.44 → 0.42). Paired listening test (Reuben, 16 held-out sentences, `scripts/speech/ab-dirs.py`): fitted 9,
+current 7, none the same. That is a lean, not a significant preference on its own, but it agrees
+with every measurement, so **Alder now uses the fitted prosody** (`prosody: 'fitted'`), and with it
+Copy Strudel. `alder-klatt` keeps the hand-set prosody for comparisons; `alder-m1` is unchanged
+(voice hash `e6959a8e`). Birch and Cedar keep their accent size relative to Alder.
+
 ## Research: what to borrow
 
 The question for each source was what can run inside a worklet, be driven by our planner, and
@@ -186,7 +226,7 @@ measurably help.
 | V1 ✓ | Continuous instrument (LF source + formant tract) | 54.4% → 28.7% WER |
 | V2 (experiment) | Articulatory planner: Story-style area functions, gestures with target approximation. Two tracts compared in the worklet: Kelly–Lochbaum waveguide, and formants computed from the area function | Corpus WER, blind A/B, CPU |
 | V3 | Consonants from the tract: closure, pressure build-up and release burst, turbulence at the constriction, voice bar, VOT | Consonant and diagnostic scores |
-| V4 | Prosody: qTA pitch targets, stress affecting duration, Rd and articulation; question and statement contours | Blind A/B, F0 against recordings |
+| V4 (stage 3, first pass done) | Prosody: qTA pitch targets, stress affecting duration, Rd and articulation; question and statement contours | Blind A/B, F0 against recordings |
 | V5 | Optimisation against recordings (mel and formant distance, evolutionary search) | Held-out ARCTIC prompts |
 
 Known limits of V1:

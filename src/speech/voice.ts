@@ -7,6 +7,7 @@
  * enforces the relationships between fields (a short vocal tract with a very low pitch, a pitch
  * range that would push the voice above ~450 Hz, …).
  */
+import { FITTED_PITCH } from './prosody-fitted'
 
 export interface VoicePitch {
   /** Speaking pitch at the start of a phrase, Hz */
@@ -79,6 +80,9 @@ export interface SpeechVoice {
   /** 'm1' keeps the M1/M2 front end (no connected-speech rules) so the frozen baseline voice
    *  reproduces its audio bit for bit; omitted = current front end */
   frontend?: 'm1'
+  /** 'fitted': durations and tune fitted to recorded speech (prosody-fitted.ts); omitted = Klatt's
+   *  rules and the hand-set tune */
+  prosody?: 'fitted'
   pitch: VoicePitch
   timing: VoiceTiming
   source: VoiceSource
@@ -121,7 +125,8 @@ export const DEFAULT_VOICE: SpeechVoice = {
   id: 'alder',
   name: 'Alder (low)',
   backend: 'formant',
-  pitch: { baseHz: 118, accentSemitones: 4, declination: 1.2, questionRise: 6, finalFall: 4 },
+  prosody: 'fitted',
+  pitch: { baseHz: 118, questionRise: 6, ...FITTED_PITCH },
   timing: { rate: 1, pauseScale: 1, stressLengthening: 1 },
   source: { breathiness: 0.08, jitter: 0.006, shimmer: 0.03, openQuotient: 0.55, spectralTilt: 0, rd: 0.9, flutter: 0.3, excitation: 0 },
   tract: { formantScale: 1, bandwidthScale: 1, nasality: 0.4 },
@@ -133,12 +138,30 @@ export const DEFAULT_VOICE: SpeechVoice = {
  * with that backend reproduces the M1 baseline bit for bit.
  */
 export const M1_VOICE: SpeechVoice = {
-  ...DEFAULT_VOICE,
+  version: 1,
   id: 'alder-m1',
   name: 'Alder (M1 baseline)',
   backend: 'formant-m1',
   frontend: 'm1',
+  pitch: { baseHz: 118, accentSemitones: 4, declination: 1.2, questionRise: 6, finalFall: 4 },
+  timing: DEFAULT_VOICE.timing,
   source: { ...DEFAULT_VOICE.source, spectralTilt: 0.25 },
+  tract: DEFAULT_VOICE.tract,
+  articulation: DEFAULT_VOICE.articulation,
+}
+
+/**
+ * Alder with the hand-set prosody it had before the fit (Klatt's duration rules, 4-semitone
+ * accents), for A/B comparisons. Alder itself uses prosody fitted to recorded speech
+ * (prosody-fitted.ts) since stage 3 of the Strudel voice.
+ */
+export const KLATT_PROSODY_VOICE: SpeechVoice = {
+  ...M1_VOICE,
+  id: 'alder-klatt',
+  name: 'Alder (hand-set prosody)',
+  backend: DEFAULT_VOICE.backend,
+  frontend: undefined,
+  source: DEFAULT_VOICE.source,
 }
 
 const preset = (base: SpeechVoice, patch: {
@@ -165,14 +188,14 @@ export const VOICE_PRESETS: readonly SpeechVoice[] = [
   preset(DEFAULT_VOICE, {
     id: 'birch',
     name: 'Birch (middle)',
-    pitch: { baseHz: 165, accentSemitones: 5 },
+    pitch: { baseHz: 165, accentSemitones: (5 / 4) * FITTED_PITCH.accentSemitones },
     tract: { formantScale: 1.1 },
     source: { openQuotient: 0.6, breathiness: 0.15, rd: 1.3 },
   }),
   preset(DEFAULT_VOICE, {
     id: 'cedar',
     name: 'Cedar (high, breathy)',
-    pitch: { baseHz: 215, accentSemitones: 5.5, questionRise: 7 },
+    pitch: { baseHz: 215, accentSemitones: (5.5 / 4) * FITTED_PITCH.accentSemitones, questionRise: 7 },
     tract: { formantScale: 1.17, bandwidthScale: 1.1 },
     source: { breathiness: 0.3, openQuotient: 0.68, spectralTilt: 0.2, rd: 1.8 },
   }),
@@ -185,7 +208,7 @@ export const VOICE_PRESETS: readonly SpeechVoice[] = [
 ]
 
 export function getVoicePreset(id: string): SpeechVoice {
-  return [...VOICE_PRESETS, M1_VOICE].find((v) => v.id === id) ?? DEFAULT_VOICE
+  return [...VOICE_PRESETS, M1_VOICE, KLATT_PROSODY_VOICE].find((v) => v.id === id) ?? DEFAULT_VOICE
 }
 
 export interface VoiceValidation {
@@ -220,6 +243,7 @@ export function validateVoice(input: SpeechVoice): VoiceValidation {
     name: input.name || 'Custom voice',
     backend: input.backend || 'formant',
     ...(input.frontend === 'm1' ? { frontend: 'm1' as const } : {}),
+    ...(input.prosody === 'fitted' ? { prosody: 'fitted' as const } : {}),
     pitch: fix('pitch'),
     timing: fix('timing'),
     source: fix('source'),
