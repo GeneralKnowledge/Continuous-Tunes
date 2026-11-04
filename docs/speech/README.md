@@ -176,6 +176,10 @@ the Speech tab), which their terms require for binary redistribution.
 
 ## Roadmap
 
+**Speech in Strudel (current direction, November 2026):** the goal is Strudel code that speaks in
+the standard REPL. The Speech tab's **Copy Strudel** button compiles the text into a stack of
+Strudel oscillators, noise and formant filters. See [strudel-speech.md](strudel-speech.md).
+
 The hybrid-engine research round (November 2026) compared six engines on the same plans and set
 the next milestones H1–H7: see [hybrid-research.md](hybrid-research.md). Two experimental
 backends came out of it, `tract` (articulatory waveguide) and `units` (diphones + TD-PSOLA, needs

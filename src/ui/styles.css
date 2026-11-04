@@ -467,3 +467,10 @@ footer {
   font-size: 0.75rem;
   color: var(--muted);
 }
+
+.strudel-speech textarea {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin-top: 6px;
+}

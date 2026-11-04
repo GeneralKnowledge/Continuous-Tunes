@@ -432,3 +432,45 @@ describe('hybrid research backends', () => {
     }
   })
 })
+
+describe('speech as Strudel code', () => {
+  it('compiles a sentence into one self-contained Strudel program', async () => {
+    const { compileStrudelSpeech } = await import('../src/speech/strudel/compile')
+    const p = plan('Now say bead again.')
+    const a = compileStrudelSpeech(p, DEFAULT_VOICE, { text: 'Now say bead again.' })
+    const b = compileStrudelSpeech(p, DEFAULT_VOICE, { text: 'Now say bead again.' })
+    expect(a.code).toBe(b.code)
+    expect(a.code).toMatch(/^\/\/ "Now say bead again\."/)
+    expect(a.code).toMatch(/setcps\(0\.\d+\)\nstack\(/)
+    expect(a.seconds).toBeGreaterThan(p.duration)
+    expect(a.events).toBeGreaterThan(20)
+    // nothing to load: only Strudel's built-in oscillators and noise
+    for (const m of a.code.matchAll(/s\("([^"]*)"\)/g)) for (const t of m[1]!.split(/\s+/)) expect(t.replace(/@\d+$/, '')).toMatch(/^(~|sawtooth|white)$/)
+    expect(a.code).not.toMatch(/NaN|Infinity|undefined/)
+    // the nasal murmur layer is present for a sentence with /n/
+    expect(a.code).toContain('// nasal murmur')
+  })
+
+  it('writes an explicit envelope depth on every gliding band-pass event', async () => {
+    const { compileStrudelSpeech } = await import('../src/speech/strudel/compile')
+    const { code } = compileStrudelSpeech(plan('Hello there.'), DEFAULT_VOICE)
+    const glides = [...code.matchAll(/\.bpf\("([^"]*)"\)\.bpattack/g)].map((m) => m[1]!)
+    expect(glides.length).toBe(4)
+    for (const g of glides)
+      for (const t of g.split(/\s+/)) {
+        if (t.startsWith('~')) continue
+        // F:Q:env — without env Strudel would sweep each event up an octave
+        expect(t.replace(/@\d+$/, '').split(':')).toHaveLength(3)
+      }
+  })
+
+  it('keeps every pattern of a layer on the same number of steps', async () => {
+    const { compileStrudelSpeech } = await import('../src/speech/strudel/compile')
+    const { code } = compileStrudelSpeech(plan('Thank you very much.'), DEFAULT_VOICE)
+    const steps = (s: string) => s.split(/\s+/).reduce((n, t) => n + (t.includes('@') ? Number(t.split('@')[1]) : 1), 0)
+    for (const layer of code.split(/,\n\s*\/\//)) {
+      const pats = [...layer.matchAll(/\("([^"]*)"\)/g)].filter((m) => m[1] !== 'sawtooth').map((m) => steps(m[1]!))
+      expect(new Set(pats).size).toBe(1)
+    }
+  })
+})

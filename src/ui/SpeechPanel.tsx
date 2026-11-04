@@ -5,6 +5,7 @@ import type { SpeechResult } from '../speech'
 import { loadLexicon } from '../speech/lexicon-loader'
 import type { Lexicon } from '../speech/lexicon'
 import { planMetrics } from '../speech/metrics'
+import { compileStrudelSpeech } from '../speech/strudel/compile'
 import { formatPronunciation } from '../speech/phonemes'
 import { PAUSE, type SpeechPlan } from '../speech/plan'
 import {
@@ -81,6 +82,8 @@ export function SpeechPanel() {
   const ctxRef = useRef<AudioContext | null>(null)
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
   const resultKey = useRef('')
+  const [strudel, setStrudel] = useState<{ key: string; code: string } | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -166,6 +169,20 @@ export function SpeechPanel() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  async function copyStrudel() {
+    const r = render()
+    if (!r) return
+    const voice = withControls(getVoicePreset(settings.voiceId), { rate: settings.rate, pitch: settings.pitch })
+    const { code } = compileStrudelSpeech(r.plan, voice, { text: settings.text })
+    setStrudel({ key: JSON.stringify(settings), code })
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied('Copied: paste it into strudel.cc and press play')
+    } catch {
+      setCopied('Copy failed: select the code below and copy it by hand')
+    }
+  }
+
   const metrics = result ? planMetrics(result.plan) : null
   const stats = lexicon?.stats()
 
@@ -241,7 +258,21 @@ export function SpeechPanel() {
         <button onClick={downloadWav} disabled={!lexicon || !settings.text.trim()}>
           Download WAV
         </button>
+        <button
+          onClick={() => void copyStrudel()}
+          disabled={!lexicon || !settings.text.trim()}
+          title="Strudel code that speaks this text with Strudel's own oscillators and filters, for the standard REPL"
+        >
+          Copy Strudel
+        </button>
       </section>
+
+      {strudel && strudel.key === JSON.stringify(settings) && (
+        <details className="strudel-speech">
+          <summary>{copied ?? 'Strudel code'}</summary>
+          <textarea readOnly value={strudel.code} rows={8} aria-label="Strudel code for this text" />
+        </details>
+      )}
 
       {lexError && <p className="speech-error">Could not load the dictionaries: {lexError}</p>}
       {error && <p className="speech-error">{error}</p>}
