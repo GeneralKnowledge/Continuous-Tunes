@@ -149,7 +149,10 @@ is not a naturalness measure, so the decision waits for the listening test.
 **Blind listening test**: the 8 held-out ARCTIC sentences from earlier rounds, spoken by PR #19
 patterns, V1, V1 with expression and the waveguide, plus the real recording as a hidden reference,
 scored 0–100 for naturalness (`scripts/speech/listen-multi.py`; page and audio in project files,
-`recordings/speech/strudel-voice/listening-test/`). Scores to follow.
+`recordings/speech/strudel-voice/listening-test/`). Reuben's result (4 Nov 2026): the recording was
+obvious (100); V1 and V1 with expression could not be told apart; PR #19 patterns (about 30) and the
+waveguide (about 28) were the worst two. Scoring five clips 0–100 was too hard to be meaningful, so
+future tests are paired A/B preference between two versions. Expression stays off by default.
 
 ## Research: what to borrow
 
