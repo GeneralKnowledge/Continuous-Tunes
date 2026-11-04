@@ -43,11 +43,6 @@ export interface SynthFrame {
   rd?: number
   /** high-pass corner of the frication noise, Hz (0 = none): the front-cavity cut-off */
   fhp?: number
-  /** constriction of the oral tract, 0–1: the Strudel instrument low-passes voicing by this much
-   *  (voice bar, voiced fricatives); ignored by this synthesiser */
-  cl?: number
-  /** recorded consonant noise to play (Strudel instrument), 1-based index; 0 = synthetic */
-  ns?: number
   /** parallel bands: [hz, bw, gain] × 3 */
   p1: number
   pb1: number

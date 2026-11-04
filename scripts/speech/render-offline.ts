@@ -8,7 +8,7 @@
  *
  * items.json: [{ id, text }]. Writes <outDir>/x/<id>.wav (mono int16) and <outDir>/plans/<id>.json
  * (the plan's segments, for measuring phones at known times).
- * Env CONS: consonant settings JSON (consonants.ts) for experiments. Env ARTIC: a JSON patch of the
+ * Env ARTIC: a JSON patch of the
  * voice's articulation (e.g. {"aspirationMs":35}).
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -44,7 +44,7 @@ mkdirSync(join(outDir, 'x'), { recursive: true })
 mkdirSync(join(outDir, 'plans'), { recursive: true })
 for (const it of items) {
   const plan = planProsody(analyzeText(it.text, { lexicon }), voice)
-  const { settings, track } = strudelVoiceOptions(plan, voice, process.env.CONS ? { consonants: JSON.parse(process.env.CONS) } : {})
+  const { settings, track } = strudelVoiceOptions(plan, voice, {})
   const audio = renderOffline({ ...settings, track }, rate)
   writeFileSync(join(outDir, 'x', `${it.id}.wav`), encodeWav(audio.subarray(0, Math.ceil((plan.duration + 0.1) * rate)), rate))
   writeFileSync(join(outDir, 'plans', `${it.id}.json`), JSON.stringify({ id: it.id, text: it.text, segments: plan.segments }))

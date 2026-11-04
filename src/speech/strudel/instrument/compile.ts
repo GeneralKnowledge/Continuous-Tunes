@@ -16,15 +16,13 @@ import { voiceProcessorModule } from './processor'
 import { tractProcessorModule } from './tract-processor'
 import { buildArticulation, type ArticFrame } from './articulation'
 import { applyExpression, DEFAULT_EXPRESSION, type ExpressionSettings } from './expression'
-import { applyConsonants, DEFAULT_CONSONANTS, NOISE_PHONES, REC_TRIM_DB, type ConsonantSettings } from './consonants'
-import { CONSONANT_NOISE } from './consonant-noise'
 
 const FRAME = 0.005
 
 /** the order and integer scale must match decodeTrack() in processor.ts */
-export const TRACK_KEYS = ['f0', 'av', 'ah', 'af', 'bp', 'rd', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'b2', 'b3', 'b4', 'b5', 'nz', 'p1', 'w1', 'g1', 'p2', 'w2', 'g2', 'p3', 'w3', 'g3', 'hp', 'cl', 'ns'] as const
+export const TRACK_KEYS = ['f0', 'av', 'ah', 'af', 'bp', 'rd', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'b2', 'b3', 'b4', 'b5', 'nz', 'p1', 'w1', 'g1', 'p2', 'w2', 'g2', 'p3', 'w3', 'g3', 'hp'] as const
 type Key = (typeof TRACK_KEYS)[number]
-const SCALE: Partial<Record<Key, number>> = { f0: 10, av: 1000, ah: 1000, af: 1000, bp: 1000, rd: 100, g1: 1000, g2: 1000, g3: 1000, cl: 1000 }
+const SCALE: Partial<Record<Key, number>> = { f0: 10, av: 1000, ah: 1000, af: 1000, bp: 1000, rd: 100, g1: 1000, g2: 1000, g3: 1000 }
 /** how far a straight line between breakpoints may stray from the frames, in the parameter's units */
 const TOL: Record<Key, (v: number) => number> = {
   f0: () => 0.6,
@@ -54,8 +52,6 @@ const TOL: Record<Key, (v: number) => number> = {
   w3: (v) => 0.06 * v,
   g3: () => 0.012,
   hp: () => 0.5,
-  cl: () => 0.02,
-  ns: () => 0.4,
 }
 
 export interface StrudelVoiceOptions {
@@ -66,9 +62,6 @@ export interface StrudelVoiceOptions {
   /** voice quality, loudness and micro-pitch from stress and phrasing (expression.ts); off by default
    *  until the listening test decides, pass {} for the defaults */
   expression?: Partial<ExpressionSettings>
-  /** stop releases, constricted-tract voicing and voice-modulated frication (consonants.ts);
-   *  false = the V1 consonants */
-  consonants?: Partial<ConsonantSettings> | false
   /** silence after the utterance before the pattern repeats, seconds (default 0.6) */
   tail?: number
   /** output level inside Strudel, before Strudel's own gain (default 6) */
@@ -109,10 +102,6 @@ const value = (fr: SynthFrame, k: Key, rd: number): number => {
       return fr.pg3
     case 'hp':
       return fr.fhp ?? 0
-    case 'cl':
-      return fr.cl ?? 0
-    case 'ns':
-      return fr.ns ?? 0
     default:
       return fr[k]
   }
@@ -182,18 +171,14 @@ export function processorSource(name: string, engine: 'formant' | 'tract' = 'for
 }
 
 /** The instrument's processor options for a plan: the encoded control track and its settings. */
-export function strudelVoiceOptions(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelVoiceOptions = {}): { engine: 'formant' | 'tract'; track: string; settings: Record<string, number | (string | number)[]> } {
+export function strudelVoiceOptions(plan: SpeechPlan, voice: SpeechVoice, opts: StrudelVoiceOptions = {}): { engine: 'formant' | 'tract'; track: string; settings: Record<string, number> } {
   const engine = opts.engine ?? 'formant'
   let track: string
-  let extra: Record<string, number | (string | number)[]> = {}
   if (engine === 'tract') track = encodeArticulation(buildArticulation(plan, voice))
   else {
     const frames = buildFrames(plan, voice, 48000)
     if (opts.expression) applyExpression(frames, plan, voice.source.rd, FRAME, { ...DEFAULT_EXPRESSION, ...opts.expression })
-    const cons = opts.consonants === false ? null : { ...DEFAULT_CONSONANTS, ...opts.consonants }
-    const bursts = cons ? applyConsonants(frames, plan, voice, FRAME, cons) : ''
-    track = encodeTrack(frames, voice.source.rd) + (bursts ? '#' + bursts : '')
-    extra = cons ? { vmod: cons.vmod, clHz: cons.clHz, clGain: cons.clGain, ...(cons.recorded ? { snd: NOISE_PHONES.map((ph) => CONSONANT_NOISE[ph]!.data), sndGain: NOISE_PHONES.map((ph) => +(10 ** (REC_TRIM_DB[ph] / 20)).toFixed(3)), recGain: cons.recGain, recBurst: cons.recBurst } : {}) } : {}
+    track = encodeTrack(frames, voice.source.rd)
   }
   const common = {
     frameSeconds: FRAME,
@@ -207,7 +192,7 @@ export function strudelVoiceOptions(plan: SpeechPlan, voice: SpeechVoice, opts: 
   const settings =
     engine === 'tract'
       ? { ...common, gain: opts.gain ?? 0.15, tractRate: 88200 * voice.tract.formantScale, burst: 0.3 * voice.articulation.consonantStrength, wall: 0, fricLp: 0.35 }
-      : { ...common, tilt: 0.6 * Math.min(1, Math.max(0, voice.source.spectralTilt)), gain: opts.gain ?? 6, scale: voice.tract.formantScale, ...extra }
+      : { ...common, tilt: 0.6 * Math.min(1, Math.max(0, voice.source.spectralTilt)), gain: opts.gain ?? 6, scale: voice.tract.formantScale }
   return { engine, track, settings }
 }
 
@@ -226,7 +211,7 @@ ac.ctVoice ??= {}
 ac.ctVoice[${sq(name)}] ??= ac.audioWorklet.addModule('data:text/javascript;base64,' + btoa(${sq(src)}))
 await ac.ctVoice[${sq(name)}]
 const speech = [${sq(track)}]
-const settings = { ${Object.entries(settings).map(([k, v]) => `${k}: ${Array.isArray(v) ? `[${v.map((e) => (typeof e === 'string' ? sq(e) : e)).join(', ')}]` : v}`).join(', ')} }
+const settings = { ${Object.entries(settings).map(([k, v]) => `${k}: ${v}`).join(', ')} }
 registerSound('ctvoice', (t, value, onended) => {
   const node = new AudioWorkletNode(ac, ${sq(name)}, { numberOfInputs: 0, outputChannelCount: [1],
     processorOptions: { ...settings, start: Math.round(t * ac.sampleRate), track: speech[value.n ?? 0] } })
