@@ -9,7 +9,8 @@ import { rulesPronunciation } from './g2p'
 import type { Lexicon } from './lexicon'
 import { utteranceWords, type PronunciationSource, type Utterance } from './linguistic'
 import { normalizeText } from './normalize'
-import { isVowel, PHONEME_IDS } from './phonemes'
+import { fft } from '../analysis/audio'
+import { isVowel, mannerOf, PHONEME_IDS } from './phonemes'
 import { PAUSE, pitchAt, type SpeechPlan } from './plan'
 
 const semitones = (a: number, b: number) => 12 * Math.log2(a / b)
@@ -277,6 +278,164 @@ export function audioHash(samples: Float32Array): string {
     h ^= v & 0xff
     h = Math.imul(h, 0x01000193)
     h ^= v >> 8
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-phone acoustics (M2): level and spectral shape of each segment in the rendered audio, so
+// consonant problems can be traced to a cause (a nasal murmur that is too weak or too bright, a
+// fricative in the wrong band) instead of only showing up as recogniser errors.
+
+export interface SegmentAcoustics {
+  phone: string
+  /** RMS level of the segment's centre relative to the utterance's stressed vowels, dB */
+  levelDb: number
+  /** spectral centroid, Hz */
+  centroid: number
+  /** energy shares below 500 Hz, 500–2500 Hz and above 2500 Hz */
+  low: number
+  mid: number
+  high: number
+  /** stops and affricates: the release (10 ms before to 20 ms after the segment's end) */
+  release?: { levelDb: number; centroid: number; peakHz: number }
+}
+
+function spectrumStats(x: Float32Array, sr: number): { power: number; centroid: number; low: number; mid: number; high: number; peakHz: number } {
+  const size = 1024
+  const re = new Float64Array(size)
+  const im = new Float64Array(size)
+  const n = Math.min(size, x.length)
+  for (let i = 0; i < n; i++) re[i] = x[i]! * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / Math.max(1, n - 1)))
+  fft(re, im)
+  let total = 0
+  let w = 0
+  let low = 0
+  let mid = 0
+  let high = 0
+  let peak = 0
+  let peakHz = 0
+  for (let k = 1; k < size / 2; k++) {
+    const f = (k * sr) / size
+    const p = re[k]! * re[k]! + im[k]! * im[k]!
+    total += p
+    w += p * f
+    if (f < 500) low += p
+    else if (f < 2500) mid += p
+    else high += p
+    if (f > 1000 && p > peak) {
+      peak = p
+      peakHz = f
+    }
+  }
+  const t = total || 1
+  let sq = 0
+  for (let i = 0; i < x.length; i++) sq += x[i]! * x[i]!
+  return { power: sq / Math.max(1, x.length), centroid: w / t, low: low / t, mid: mid / t, high: high / t, peakHz }
+}
+
+export function segmentAcoustics(samples: Float32Array, sampleRate: number, plan: SpeechPlan): SegmentAcoustics[] {
+  const slice = (a: number, b: number) => samples.subarray(Math.max(0, Math.floor(a * sampleRate)), Math.min(samples.length, Math.floor(b * sampleRate)))
+  const centre = (s: { start: number; duration: number }) => slice(s.start + s.duration * 0.2, s.start + s.duration * 0.8)
+  const vowelPowers = plan.segments
+    .filter((s) => isVowel(s.phone) && s.stress === 1 && s.duration > 0.05)
+    .map((s) => spectrumStats(centre(s), sampleRate).power)
+    .sort((a, b) => a - b)
+  const ref = vowelPowers[Math.floor(vowelPowers.length / 2)] ?? 1e-6
+  const db = (p: number) => 10 * Math.log10((p + 1e-12) / ref)
+  const out: SegmentAcoustics[] = []
+  for (const s of plan.segments) {
+    if (s.phone === PAUSE || s.duration < 0.02) continue
+    const st = spectrumStats(centre(s), sampleRate)
+    const row: SegmentAcoustics = { phone: s.phone, levelDb: db(st.power), centroid: st.centroid, low: st.low, mid: st.mid, high: st.high }
+    const manner = isVowel(s.phone) ? 'vowel' : mannerOf(s.phone)
+    if (manner === 'stop' || manner === 'affricate') {
+      const end = s.start + s.duration
+      const r = spectrumStats(slice(end - 0.01, end + 0.02), sampleRate)
+      row.release = { levelDb: db(r.power), centroid: r.centroid, peakHz: r.peakHz }
+    }
+    out.push(row)
+  }
+  return out
+}
+
+/**
+ * Approximate ranges for natural adult male speech (levels relative to stressed vowels; centroids
+ * for a 22 kHz recording). From Jongman, Wayland & Wong 2000 (fricative spectral moments and
+ * amplitudes), Stevens 1998 "Acoustic Phonetics" (nasal murmurs, voice bars, bursts) and Kent & Read
+ * 2002. They are guides for spotting gross errors, not targets to optimise towards.
+ */
+export const NATURAL_RANGES: Record<string, { levelDb?: [number, number]; centroid?: [number, number]; low?: [number, number]; releaseCentroid?: [number, number] }> = {
+  m: { levelDb: [-14, -3], low: [0.75, 1] },
+  n: { levelDb: [-14, -3], low: [0.75, 1] },
+  ŋ: { levelDb: [-14, -3], low: [0.7, 1] },
+  b: { levelDb: [-35, -15], low: [0.85, 1] },
+  d: { levelDb: [-35, -15], low: [0.85, 1] },
+  g: { levelDb: [-35, -15], low: [0.85, 1] },
+  p: { levelDb: [-80, -35], releaseCentroid: [800, 3500] },
+  t: { levelDb: [-80, -35], releaseCentroid: [3500, 7000] },
+  k: { levelDb: [-80, -35], releaseCentroid: [1500, 4000] },
+  s: { levelDb: [-20, -6], centroid: [5000, 8000] },
+  z: { levelDb: [-22, -6], centroid: [4000, 8000] },
+  ʃ: { levelDb: [-20, -6], centroid: [3000, 5000] },
+  f: { levelDb: [-35, -18], centroid: [3500, 7000] },
+  θ: { levelDb: [-35, -18], centroid: [3500, 7500] },
+  v: { levelDb: [-28, -10] },
+  ð: { levelDb: [-28, -10] },
+}
+
+export interface PhoneAcousticSummary {
+  phone: string
+  n: number
+  levelDb: number
+  centroid: number
+  low: number
+  releaseLevelDb?: number
+  releaseCentroid?: number
+  /** fields outside NATURAL_RANGES */
+  outside: string[]
+}
+
+export function summarisePhoneAcoustics(rows: readonly SegmentAcoustics[]): PhoneAcousticSummary[] {
+  const by = new Map<string, SegmentAcoustics[]>()
+  for (const r of rows) by.set(r.phone, [...(by.get(r.phone) ?? []), r])
+  const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+  return PHONEME_IDS.filter((p) => by.has(p)).map((phone) => {
+    const rs = by.get(phone)!
+    const rel = rs.filter((r) => r.release)
+    const sum: PhoneAcousticSummary = {
+      phone,
+      n: rs.length,
+      levelDb: avg(rs.map((r) => r.levelDb)),
+      centroid: avg(rs.map((r) => r.centroid)),
+      low: avg(rs.map((r) => r.low)),
+      ...(rel.length ? { releaseLevelDb: avg(rel.map((r) => r.release!.levelDb)), releaseCentroid: avg(rel.map((r) => r.release!.centroid)) } : {}),
+      outside: [],
+    }
+    const nat = NATURAL_RANGES[phone]
+    const check = (name: string, v: number | undefined, r?: [number, number]) => {
+      if (r && v !== undefined && (v < r[0] || v > r[1])) sum.outside.push(name)
+    }
+    check('level', sum.levelDb, nat?.levelDb)
+    check('centroid', sum.centroid, nat?.centroid)
+    check('low', sum.low, nat?.low)
+    check('release', sum.releaseCentroid, nat?.releaseCentroid)
+    return sum
+  })
+}
+
+/** Stable short hash of a voice (sorted-key JSON, FNV-1a): names an exact configuration in experiment logs. */
+export function voiceHash(voice: unknown): string {
+  const canon = (v: unknown): string =>
+    v && typeof v === 'object'
+      ? Array.isArray(v)
+        ? `[${v.map(canon).join(',')}]`
+        : `{${Object.keys(v as object).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(',')}}`
+      : JSON.stringify(v)
+  let h = 0x811c9dc5
+  for (const ch of canon(voice)) {
+    h ^= ch.charCodeAt(0)
     h = Math.imul(h, 0x01000193)
   }
   return (h >>> 0).toString(16).padStart(8, '0')

@@ -20,10 +20,14 @@ export type BenchmarkCategory =
 
 export interface BenchmarkItem {
   id: string
-  category: BenchmarkCategory
+  category: BenchmarkCategory | 'diagnostic'
   text: string
   /** speaking-rate multiplier for this item (default 1) */
   rate?: number
+  /** diagnostic items: the word under test, its contrast class and the confusable foils */
+  target?: string
+  contrast?: DiagnosticContrast
+  foils?: string[]
 }
 
 const MINIMAL_PAIRS: [string, string][] = [
@@ -76,3 +80,101 @@ export const BENCHMARK: readonly BenchmarkItem[] = [
   { id: 'rate-slow', category: 'conversation', text: 'Please speak a little more slowly.', rate: 0.75 },
   { id: 'rate-fast', category: 'conversation', text: 'Please speak a little more quickly.', rate: 1.4 },
 ]
+
+/**
+ * Consonant diagnostic set (M2): one word per item in the same carrier, grouped by the contrast
+ * that failed in M1. Scored as a closed-set test: was the target word heard, or one of its foils?
+ * Kept apart from BENCHMARK so the M1 numbers stay comparable run to run.
+ */
+export type DiagnosticContrast =
+  | 'nasal-vs-stop'
+  | 'labiodental-dental'
+  | 'velar-vs-alveolar'
+  | 'sh-vs-ch'
+  | 'final-voicing'
+  | 'fricative-voicing'
+  | 'vowels'
+
+const DIAGNOSTIC_WORDS: [word: string, contrast: DiagnosticContrast, foils: string][] = [
+  ['man', 'nasal-vs-stop', 'bad bat ban mad'],
+  ['bad', 'nasal-vs-stop', 'man ban mad'],
+  ['net', 'nasal-vs-stop', 'debt let'],
+  ['debt', 'nasal-vs-stop', 'net'],
+  ['me', 'nasal-vs-stop', 'bee knee'],
+  ['bee', 'nasal-vs-stop', 'me'],
+  ['seem', 'nasal-vs-stop', 'seed seen'],
+  ['seed', 'nasal-vs-stop', 'seem seen seat'],
+  ['rain', 'nasal-vs-stop', 'raid'],
+  ['song', 'nasal-vs-stop', 'sog sock'],
+  ['fin', 'labiodental-dental', 'thin'],
+  ['thin', 'labiodental-dental', 'fin'],
+  ['fine', 'labiodental-dental', 'vine'],
+  ['vine', 'labiodental-dental', 'fine wine'],
+  ['free', 'labiodental-dental', 'three'],
+  ['three', 'labiodental-dental', 'free tree'],
+  ['fought', 'labiodental-dental', 'thought'],
+  ['thought', 'labiodental-dental', 'fought'],
+  ['leave', 'labiodental-dental', 'leaf'],
+  ['leaf', 'labiodental-dental', 'leave'],
+  ['cap', 'velar-vs-alveolar', 'tap cab'],
+  ['tap', 'velar-vs-alveolar', 'cap tab'],
+  ['kin', 'velar-vs-alveolar', 'tin'],
+  ['tin', 'velar-vs-alveolar', 'kin'],
+  ['cool', 'velar-vs-alveolar', 'tool'],
+  ['tool', 'velar-vs-alveolar', 'cool'],
+  ['back', 'velar-vs-alveolar', 'bat bag'],
+  ['bat', 'velar-vs-alveolar', 'back bad'],
+  ['share', 'sh-vs-ch', 'chair'],
+  ['chair', 'sh-vs-ch', 'share'],
+  ['shop', 'sh-vs-ch', 'chop'],
+  ['chop', 'sh-vs-ch', 'shop'],
+  ['wash', 'sh-vs-ch', 'watch'],
+  ['watch', 'sh-vs-ch', 'wash'],
+  ['cab', 'final-voicing', 'cap'],
+  ['seat', 'final-voicing', 'seed'],
+  ['bag', 'final-voicing', 'back'],
+  ['rope', 'final-voicing', 'robe'],
+  ['robe', 'final-voicing', 'rope'],
+  ['bus', 'final-voicing', 'buzz'],
+  ['zip', 'fricative-voicing', 'sip'],
+  ['sip', 'fricative-voicing', 'zip'],
+  ['zoo', 'fricative-voicing', 'sue'],
+  ['sue', 'fricative-voicing', 'zoo'],
+  ['bead', 'vowels', 'bid bed'],
+  ['bid', 'vowels', 'bead bed'],
+  ['bed', 'vowels', 'bad bid'],
+  ['cut', 'vowels', 'cat cot'],
+  ['cart', 'vowels', 'cut caught'],
+  ['caught', 'vowels', 'cot cart'],
+  ['full', 'vowels', 'fool fall'],
+  ['fool', 'vowels', 'full'],
+]
+
+export const DIAGNOSTIC: readonly BenchmarkItem[] = DIAGNOSTIC_WORDS.map(([word, contrast, foils]) => ({
+  id: `diag-${word}`,
+  category: 'diagnostic' as const,
+  text: `Now say ${word} again.`,
+  target: word,
+  contrast,
+  foils: foils.split(' '),
+}))
+
+export const BENCHMARK_SETS = { core: BENCHMARK, diagnostic: DIAGNOSTIC, all: [...BENCHMARK, ...DIAGNOSTIC] } as const
+export type BenchmarkSet = keyof typeof BENCHMARK_SETS
+
+/**
+ * Closed-set scoring of a diagnostic item: the word in the carrier slot ("Now say ___ again") as
+ * transcribed, whether it is the target, a listed foil, or something else.
+ */
+export function scoreDiagnostic(item: BenchmarkItem, heardWords: readonly string[]): { heard: string; correct: boolean; foil: boolean } {
+  const words = heardWords.map((w) => w.toLowerCase().replace(/[^a-z']/g, '')).filter(Boolean)
+  const target = item.target ?? ''
+  if (words.includes(target)) return { heard: target, correct: true, foil: false }
+  const foil = (item.foils ?? []).find((f) => words.includes(f))
+  if (foil) return { heard: foil, correct: false, foil: true }
+  // the slot: words between "say" and "again" when the carrier survived, else everything
+  const i = words.indexOf('say')
+  const j = words.lastIndexOf('again')
+  const slot = i >= 0 && j > i ? words.slice(i + 1, j) : words.filter((w) => w !== 'now' && w !== 'say' && w !== 'again')
+  return { heard: slot.join(' ') || '∅', correct: false, foil: false }
+}

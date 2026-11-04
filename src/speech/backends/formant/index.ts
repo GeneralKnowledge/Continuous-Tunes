@@ -10,7 +10,7 @@ import { isVowel } from '../../phonemes'
 import { PAUSE, pitchAt, type PlanSegment, type SpeechPlan } from '../../plan'
 import type { SpeechVoice } from '../../voice'
 import type { RenderOptions, SpeechBackend } from '../types'
-import { synthesizeFrames, NASAL_POLE, type SynthFrame } from './klatt'
+import { higherPoles, synthesizeFrames, NASAL_POLE, type SynthFrame } from './klatt'
 import { SCHWA, targetFor, type ConsonantTarget, type FricBand, type Formants } from './targets'
 
 const FRAME = 0.005
@@ -28,6 +28,11 @@ interface Phase {
   af: number
   bypass: number
   fric: readonly FricBand[]
+  fricHp?: number
+  /** stop releases: the frication decays from a transient instead of holding level */
+  burst?: boolean
+  /** voiced stop closures: voicing dies away as pressure builds behind the closure */
+  closure?: boolean
   /** consonant data for boundary blending, if this phase is a consonant */
   cons?: ConsonantTarget
   vowel: boolean
@@ -112,9 +117,12 @@ export function buildPhases(plan: SpeechPlan, voice: SpeechVoice): Phase[] {
           ? [Math.min(3000, Math.max(1500, following.f2 * 1.05)), b[1], b[2]]
           : b,
       )
-      const af = (target.af || target.stop.burstGain) * strength
-      phases.push({ ...base, start, end: end - burst, av: target.av, ah: 0, af: 0, bypass: 0, fric })
-      phases.push({ ...base, start: end - burst, end, av: target.av, ah: 0, af, bypass: target.bypass, fric })
+      // Word-final stops before a pause are released weakly or not at all in British English
+      // (often glottally reinforced); a full release there is heard as an affricate.
+      const finalRelease = seg.phraseFinal && seg.wordFinal && !target.af ? 0.35 : 1
+      const af = (target.af || target.stop.burstGain) * strength * finalRelease
+      phases.push({ ...base, start, end: end - burst, av: target.av, ah: 0, af: 0, bypass: 0, fric, fricHp: target.fricHp, closure: true })
+      phases.push({ ...base, start: end - burst, end, av: target.av, ah: 0, af, bypass: target.bypass, fric, fricHp: target.fricHp, burst: !target.af })
       return
     }
     phases.push({
@@ -126,6 +134,7 @@ export function buildPhases(plan: SpeechPlan, voice: SpeechVoice): Phase[] {
       af: target.af * strength,
       bypass: target.bypass,
       fric: target.fric,
+      fricHp: target.fricHp,
     })
   })
   return phases
@@ -242,7 +251,15 @@ export function buildFrames(plan: SpeechPlan, voice: SpeechVoice, sampleRate: nu
         av = q.av * Math.max(0, (u - 0.6) / 0.4)
         ah = 0.6 * (1 - u * 0.7)
       }
-      return { av, ah, af: q.af, bypass: q.bypass }
+      // A release is a transient: noise peaks at the release and decays (time constant a third of
+      // the burst) into the aspiration, rather than a flat block of frication, which is heard as
+      // an affricate ("cat" → "catch"). Affricates (af set on the target) keep their flat frication.
+      // Voicing in a stop closure decays as oral pressure rises (Westbury 1983); a voice bar held
+      // at full level for the whole closure sounds like a continuant (/b/ → /v/, /d/ → /ð/).
+      if (q.closure && av > 0) av *= 1 - 0.7 * Math.min(1, (time - q.start) / Math.max(1e-3, q.end - q.start))
+      let af = q.af
+      if (q.burst) af *= 1.6 * Math.exp((-3 * (time - q.start)) / Math.max(1e-3, q.end - q.start))
+      return { av, ah, af, bypass: q.bypass }
     }
     let a = amp(p, t)
     const XF = 0.006
@@ -289,6 +306,8 @@ export function buildFrames(plan: SpeechPlan, voice: SpeechVoice, sampleRate: nu
       p3: Math.min(nyq, p3 * fScale),
       pb3,
       pg3,
+      // vowels borrow a neighbour's corner so frication cross-fading into them stays shaped
+      fhp: (p.fricHp || phases[pi + 1]?.fricHp || phases[pi - 1]?.fricHp || 0) * fScale,
     })
   }
   return frames
@@ -301,7 +320,7 @@ export const formantBackend: SpeechBackend = {
   render(plan: SpeechPlan, voice: SpeechVoice, opts: RenderOptions = {}): Float32Array {
     const sampleRate = opts.sampleRate ?? 22050
     const frames = buildFrames(plan, voice, sampleRate)
-    const samples = synthesizeFrames(frames, FRAME, sampleRate, voice.source, opts.seed ?? 1)
+    const samples = synthesizeFrames(frames, FRAME, sampleRate, voice.source, opts.seed ?? 1, higherPoles(voice.tract.formantScale))
     return samples.subarray(0, Math.ceil(plan.duration * sampleRate))
   },
 }
