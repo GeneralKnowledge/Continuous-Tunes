@@ -52,19 +52,39 @@ export function parseLexicon(text: string): Map<string, string> {
 
 const END: Record<string, string> = { statement: '.', question: '?', exclamation: '!' }
 
-/** The misaki phoneme string for an utterance, punctuated by its phrase boundaries. */
-export function kokoroPhonemes(utt: Utterance, lexicon: Map<string, string>): string {
-  const out: string[] = []
+/** A run of the phoneme string: a word (with its normalised spelling) or the space or mark between words. */
+export interface KokoroPiece {
+  phonemes: string
+  /** the word this run speaks; absent for spaces and punctuation */
+  word?: string
+}
+
+/** The misaki phoneme string for an utterance as words and separators, punctuated by its phrase boundaries. */
+export function kokoroPieces(utt: Utterance, lexicon: Map<string, string>): KokoroPiece[] {
+  const out: KokoroPiece[] = []
   for (const s of utt.sentences) {
     s.phrases.forEach((ph, pi) => {
-      const words = ph.words.map((w) => lexicon.get(w.text.toLowerCase()) ?? misakiFromPhones(w.phones)).filter(Boolean)
+      const words = ph.words
+        .map((w) => ({ word: w.text, phonemes: lexicon.get(w.text.toLowerCase()) ?? misakiFromPhones(w.phones) }))
+        .filter((w) => w.phonemes)
       if (!words.length) return
+      if (out.length) out.push({ phonemes: ' ' })
+      words.forEach((w, i) => {
+        if (i) out.push({ phonemes: ' ' })
+        out.push(w)
+      })
       const last = pi === s.phrases.length - 1
-      const mark = last ? (END[s.type] ?? '.') : ph.boundary === 'clause' ? ';' : ','
-      out.push(words.join(' ') + mark)
+      out.push({ phonemes: last ? (END[s.type] ?? '.') : ph.boundary === 'clause' ? ';' : ',' })
     })
   }
-  return out.join(' ')
+  return out
+}
+
+/** The misaki phoneme string for an utterance, punctuated by its phrase boundaries. */
+export function kokoroPhonemes(utt: Utterance, lexicon: Map<string, string>): string {
+  return kokoroPieces(utt, lexicon)
+    .map((p) => p.phonemes)
+    .join('')
 }
 
 /** Token ids for a phoneme string; symbols outside the vocabulary are dropped. */

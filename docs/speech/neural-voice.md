@@ -11,15 +11,18 @@ chain like any other sound (`.gain()`, `.room()`, `.speed()` …).
 
 These are scores on the 114-sentence benchmark, using the same texts as every other engine, scored
 by Whisper (the judge Reuben chose). The first two rows were recorded from real Strudel
-(`@strudel/web` 1.3, the same engine as strudel.cc). The last row is the app's own path (our front
+(`@strudel/web` 1.3, the same engine as strudel.cc), and so was the last. The third row is the app's own path (our front
 end and tokeniser) rendered in Node; it does better than sherpa-onnx's because our normaliser
-reads numbers, money and abbreviations.
+reads numbers, money and abbreviations. The last row is that same audio, cut into words and played
+back as a Strudel pattern: word scores are within noise of the single block, and 6 of the 114
+diagnostic words are lost (mostly "say" heard as "stay" before a pause).
 
 | Voice | Whisper small WER | Whisper base WER | Diagnostic words heard |
 |---|---|---|---|
 | Strudel formant voice V1 (fitted prosody) | 15% | 18% | 47% |
 | Kokoro bm_george through sherpa-onnx, played by Strudel | **8%** | 12% | 83% |
 | Kokoro bm_george through the app's own path (below) | **4%** | **7%** | **85%** |
+| The same, one Strudel sound per word (the button's output now) | **3%** | 8% | 79% |
 
 End to end, the button was clicked in headless Chromium against `vite preview` and produced
 56 KB of code for two sentences in 25 s on first use, including the model download. That code was
@@ -41,8 +44,31 @@ then played in real Strudel. Whisper small transcribed it word for word, "zoo" i
      part of `voices.bin` the app ships.
 4. **Encoding.** Audio is encoded as 48 kbps mono MP3 in the page, using lamejs
    (`src/speech/neural/mp3.ts`). That is about 11 KB of base64 per second of speech.
-5. **Strudel program** (`src/speech/strudel/recorded.ts`). The program decodes the audio with
-   `decodeAudioData`, registers it as `ctvoice` and plays `s("ctvoice")`, one cycle per utterance.
+5. **Word timing.** The network's second output is the number of frames (600 samples, 25 ms) it
+   spends on each token. Summing them over each word's tokens gives exact word boundaries, with no
+   aligner (`Kokoro.speakWords`).
+6. **Strudel program** (`compileStrudelWords` in `src/speech/strudel/recorded.ts`). The program:
+   - decodes the audio with `decodeAudioData` and lines it up by its first sound, so a decoder's
+     MP3 delay does not matter;
+   - cuts one short WAV per word, from its start to the next word's start, overlapping its
+     neighbours by 10 ms with linear cross-fades, so the cuts played in the recorded rhythm add up
+     to the original. Two earlier cuts failed. Generous overlaps played consonant edges twice, and
+     butt joins with short fades left a dip. Either way, Whisper heard "say" as "stay".
+   - registers the words with `samples()` in the bank `ct`;
+   - plays the sentence as an ordinary pattern, with one cycle per utterance:
+
+   ```
+   s(`the@5 north@14 wind@24 and@4 the:1@3 ~@4
+      sun@24 were@5 …`).bank("ct")
+   ```
+
+   The `@` weights are the recorded rhythm in 25 ms steps. A pattern never contains `@0`:
+   Strudel reads a zero weight as one step, and every word after it then slipped by a few
+   milliseconds, which cost 6 points of WER until it was found. A repeated word is `the:1`, `the:2`
+   and so on. Because the words are ordinary Strudel samples, everything a sample can do works:
+   reorder, repeat or drop words, `.rev()`, `.ply()`, `.speed()`, `.note()` (which shifts pitch and
+   speed together, as a sampler does), `.room()`, `.clip()` and so on.
+
    The rate slider sets Kokoro's speed. The pitch slider and the voice presets apply only to the
    formant voices.
 
@@ -77,8 +103,9 @@ node scripts/speech/strudel-render.mjs <out.json> <dir> 2                   # pl
 
 ## What next
 
-- **Musical control.** The formant voice can follow any pitch track. The neural voice is a fixed
-  recording, which Strudel can only retime and transpose as a whole (`.speed()`). The vocoder
+- **Musical control.** The formant voice can follow any pitch track. Each neural word is a fixed
+  recording, which Strudel can retime and transpose only as a sampler does (`.note()` changes
+  speed too). A pitch shifter that keeps the timing would let words follow a melody. The vocoder
   (option A of the plan) can re-pitch it frame by frame: analyse the neural audio, then
   resynthesise it in Strudel at musical pitches. Its analysis script and worklet are drafted in
   `scripts/speech/vocoder/` and `src/speech/strudel/instrument/vocoder-processor.ts`.
