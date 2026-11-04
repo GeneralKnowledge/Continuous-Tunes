@@ -2,15 +2,18 @@
  * Compile exported plans (export-plans.ts) into Strudel programs for strudel-render.mjs, so the
  * Strudel voice is scored on exactly the same phones, timing and pitch as the other engines.
  *
- *   npx tsx scripts/speech/strudel-compile-plans.ts <plansDir> <items.json> [voice] [--step 0.02]
+ *   npx tsx scripts/speech/strudel-compile-plans.ts <plansDir> <items.json> [voice] [--step 0.02] [--instrument]
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getVoicePreset } from '../../src/speech'
 import type { SpeechPlan } from '../../src/speech/plan'
 import { compileStrudelSpeech } from '../../src/speech/strudel/compile'
+import { compileStrudelVoice } from '../../src/speech/strudel/instrument/compile'
 
 const args = process.argv.slice(2)
+const ii = args.indexOf('--instrument')
+const instrument = ii >= 0 && args.splice(ii, 1).length > 0
 const si = args.indexOf('--step')
 const step = si >= 0 ? Number(args.splice(si, 2)[1]) : undefined
 const [plansDir, out, voiceId = 'alder'] = args
@@ -20,6 +23,10 @@ const items = readdirSync(plansDir)
   .filter((f) => f.endsWith('.json'))
   .map((f) => {
     const p = JSON.parse(readFileSync(join(plansDir, f), 'utf8')) as SpeechPlan & { id: string; text: string }
+    if (instrument) {
+      const r = compileStrudelVoice(p, voice, { text: p.text, tail: 0.3 })
+      return { id: p.id, code: r.code, seconds: r.seconds, speech: r.seconds - 0.3, events: 1 }
+    }
     const r = compileStrudelSpeech(p, voice, { text: p.text, step, tail: 0.3, tune: process.env.STRUDEL_TUNE ? JSON.parse(process.env.STRUDEL_TUNE) : undefined })
     return { id: p.id, code: r.code, seconds: r.seconds, speech: r.seconds - 0.3, events: r.events }
   })

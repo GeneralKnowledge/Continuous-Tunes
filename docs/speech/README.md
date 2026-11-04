@@ -176,9 +176,12 @@ the Speech tab), which their terms require for binary redistribution.
 
 ## Roadmap
 
-**Speech in Strudel (current direction, November 2026):** the goal is Strudel code that speaks in
-the standard REPL. The Speech tab's **Copy Strudel** button compiles the text into a stack of
-Strudel oscillators, noise and formant filters. See [strudel-speech.md](strudel-speech.md).
+**A Strudel-native voice (current direction, November 2026):** Strudel produces all speech audio.
+The Speech tab's **Copy Strudel voice** button compiles the text into one Strudel program that
+registers its own voice instrument (an AudioWorklet glottal source and vocal tract) and speaks
+the utterance as one continuous sound. See [strudel-voice.md](strudel-voice.md) for the
+architecture, research, measurements and milestones V0–V5. The earlier pattern-only version
+(**Copy Strudel (patterns only)**) is documented in [strudel-speech.md](strudel-speech.md).
 
 The hybrid-engine research round (November 2026) compared six engines on the same plans and set
 the next milestones H1–H7: see [hybrid-research.md](hybrid-research.md). Two experimental
