@@ -11,9 +11,11 @@
  */
 import type { InferenceSession } from 'onnxruntime-web'
 import type { Utterance } from '../linguistic'
-import { kokoroPhonemes, kokoroTokens, parseLexicon, parseTokens, type KokoroVocab } from './kokoro-text'
+import { kokoroPieces, kokoroTokens, parseLexicon, parseTokens, type KokoroPiece, type KokoroVocab } from './kokoro-text'
 
 export const KOKORO_RATE = 24000
+/** samples per duration frame of the network's output */
+export const KOKORO_HOP = 600
 const MAX_TOKENS = 500
 const STYLE = 256
 
@@ -61,46 +63,82 @@ export class Kokoro {
 
   /** Speech for an utterance at 24 kHz, one sentence (or phrase, if long) per network call. */
   async speak(utt: Utterance, speed = 1): Promise<Float32Array> {
-    const parts: Float32Array[] = []
-    for (const s of utt.sentences) {
-      const ids = kokoroTokens(kokoroPhonemes({ text: s.text, sentences: [s] }, this.vocab.lexicon), this.vocab.tokens)
-      const chunks = ids.length <= MAX_TOKENS ? [ids] : splitAtPunctuation(ids, this.vocab.tokens)
-      for (const c of chunks) if (c.length) parts.push(await this.run(c, speed))
-    }
-    const out = new Float32Array(parts.reduce((n, p) => n + p.length, 0))
-    let at = 0
-    for (const p of parts) {
-      out.set(p, at)
-      at += p.length
-    }
-    return out
+    return (await this.speakWords(utt, speed)).audio
   }
 
-  private async run(ids: number[], speed: number): Promise<Float32Array> {
+  /**
+   * Speech with the time span of every word, taken from the network's own duration predictions
+   * (one frame = KOKORO_HOP samples), so the audio can be cut exactly at word boundaries.
+   */
+  async speakWords(utt: Utterance, speed = 1): Promise<{ audio: Float32Array; words: WordSpan[] }> {
+    const parts: Float32Array[] = []
+    const words: WordSpan[] = []
+    let at = 0
+    for (const s of utt.sentences) {
+      const pieces = kokoroPieces({ text: s.text, sentences: [s] }, this.vocab.lexicon).map((p) => ({ ...p, ids: kokoroTokens(p.phonemes, this.vocab.tokens) }))
+      for (const chunk of splitPieces(pieces)) {
+        const ids = chunk.flatMap((p) => p.ids)
+        if (!ids.length) continue
+        const { audio, durations } = await this.run(ids, speed)
+        // durations[0] is the leading pad token; token k of the chunk is durations[k + 1]
+        let frame = durations[0]!
+        let k = 1
+        for (const p of chunk) {
+          const start = frame
+          for (let j = 0; j < p.ids.length; j++) frame += durations[k++]!
+          if (p.word && frame > start) words.push({ word: p.word, start: at + start * KOKORO_HOP, end: at + frame * KOKORO_HOP })
+        }
+        parts.push(audio)
+        at += audio.length
+      }
+    }
+    const out = new Float32Array(at)
+    let o = 0
+    for (const p of parts) {
+      out.set(p, o)
+      o += p.length
+    }
+    return { audio: out, words }
+  }
+
+  private async run(ids: number[], speed: number): Promise<{ audio: Float32Array; durations: number[] }> {
     const { Tensor } = this.ort
     const n = Math.min(ids.length, 509)
     const style = this.voice.subarray(n * STYLE, (n + 1) * STYLE)
     const tokens = new Tensor('int64', BigInt64Array.from([0, ...ids, 0].map(BigInt)), [1, ids.length + 2])
     const res = await this.session.run({ tokens, style: new Tensor('float32', Float32Array.from(style), [1, STYLE]), speed: new Tensor('float32', Float32Array.of(speed), [1]) })
-    return res.audio!.data as Float32Array
+    // the export's second output is the predicted frames per token (pads included)
+    const dur = res[this.session.outputNames.find((o) => o !== 'audio')!]!.data as BigInt64Array | Int32Array
+    return { audio: res.audio!.data as Float32Array, durations: Array.from(dur, Number) }
   }
 }
 
-/** Split an over-long token run after commas and full stops, keeping each piece under the limit. */
-function splitAtPunctuation(ids: number[], tokens: Map<string, number>): number[][] {
-  const breaks = new Set(['.', ',', ';', ':', '!', '?'].map((c) => tokens.get(c)))
-  const out: number[][] = []
-  let cur: number[] = []
+/** Time span of one word in the audio, samples at KOKORO_RATE. */
+export interface WordSpan {
+  word: string
+  start: number
+  end: number
+}
+
+type TokenPiece = KokoroPiece & { ids: number[] }
+
+/** Group pieces into network calls under the token limit, cutting after punctuation where possible. */
+function splitPieces(pieces: TokenPiece[]): TokenPiece[][] {
+  const out: TokenPiece[][] = []
+  let cur: TokenPiece[] = []
+  let n = 0
   let lastBreak = -1
-  for (const id of ids) {
-    cur.push(id)
-    if (breaks.has(id)) lastBreak = cur.length
-    if (cur.length >= MAX_TOKENS) {
+  for (const p of pieces) {
+    if (n + p.ids.length > MAX_TOKENS && cur.length) {
       const cut = lastBreak > 0 ? lastBreak : cur.length
       out.push(cur.slice(0, cut))
       cur = cur.slice(cut)
+      n = cur.reduce((m, q) => m + q.ids.length, 0)
       lastBreak = -1
     }
+    cur.push(p)
+    n += p.ids.length
+    if (!p.word && /[.,;:!?]/.test(p.phonemes)) lastBreak = cur.length
   }
   out.push(cur)
   return out

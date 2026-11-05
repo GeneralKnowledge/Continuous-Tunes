@@ -76,17 +76,23 @@ type Raw =
   | { kind: 'star' }
   | { kind: 'expanded'; words: string; source: string }
 
+/** A minus sign only where it cannot be a hyphen or a range dash ("COVID-19", "5-10"). */
+const MINUS = String.raw`(?:(?<![\w)])-)?`
+
 // One alternation; earlier alternatives win
 const TOKEN_RE = new RegExp(
   [
     String.raw`(?<iso>\d{4}-\d{2}-\d{2})`,
     String.raw`(?<dmy>\d{1,2}/\d{1,2}/\d{2,4})`,
+    String.raw`(?<frac>(?<![\d/])\d{1,2}/\d{1,2}(?![\d/]))`,
     String.raw`(?<time>\d{1,2}:\d{2}(?:\s?(?:am|pm|a\.m\.|p\.m\.))?)`,
+    String.raw`(?<ratio>\d{1,2}:\d(?!\d))`,
     String.raw`(?<money>[£$€]\d[\d,]*(?:\.\d+)?(?:\s?(?:m|bn|k|million|billion)\b)?)`,
-    String.raw`(?<percent>-?\d[\d,]*(?:\.\d+)?%)`,
+    String.raw`(?<percent>${MINUS}\d[\d,]*(?:\.\d+)?%)`,
+    String.raw`(?<decade>'?\d{1,3}0s\b)`,
     String.raw`(?<ord>\d+(?:st|nd|rd|th)\b)`,
     String.raw`(?<unit>\d+(?:\.\d+)?\s?(?:km|cm|mm|kg|mph|kph|khz|hz|ms|m|g)\b)`,
-    String.raw`(?<num>-?\d[\d,]*(?:\.\d+)?)`,
+    String.raw`(?<num>${MINUS}\d+(?:,\d{3})*(?:\.\d+)?)`,
     String.raw`(?<dotted>(?:[A-Za-z]\.){2,})`,
     String.raw`(?<word>[A-Za-z]+(?:'[A-Za-z]+)*)`,
     String.raw`(?<star>\*)`,
@@ -96,14 +102,44 @@ const TOKEN_RE = new RegExp(
   'g',
 )
 
+const VULGAR: Record<string, string> = {
+  '½': 'a half', '⅓': 'a third', '⅔': 'two thirds', '¼': 'a quarter', '¾': 'three quarters',
+  '⅕': 'a fifth', '⅛': 'an eighth', '⅜': 'three eighths', '⅝': 'five eighths', '⅞': 'seven eighths',
+}
+
+/** Any Unicode decimal digit (Arabic-Indic, Devanagari, full-width …) as an ASCII digit. */
+function asciiDigits(text: string): string {
+  return text.replace(/\P{ASCII}/gu, (ch) => {
+    if (!/\p{Nd}/u.test(ch)) return ch
+    // decimal digits come in runs of ten starting at zero (some runs follow one another)
+    const cp = ch.codePointAt(0)!
+    let start = cp
+    while (/\p{Nd}/u.test(String.fromCodePoint(start - 1))) start--
+    return String((cp - start) % 10)
+  })
+}
+
 function cleanText(text: string): string {
-  return text
+  return asciiDigits(text)
+    .replace(/(\d)\s?([½⅓⅔¼¾⅕⅛⅜⅝⅞])/g, (_, d: string, f: string) => `${d} and ${VULGAR[f]}`)
+    .replace(/[½⅓⅔¼¾⅕⅛⅜⅝⅞]/g, (f) => ` ${VULGAR[f]} `)
+    .replace(/²/g, ' squared ')
+    .replace(/³/g, ' cubed ')
+    .replace(/(\d)\s?[–―]\s?(?=\d)/g, '$1-')
     .replace(/[‘’ʼ]/g, "'")
     .replace(/[“”«»]/g, '"')
     .replace(/[–―]/g, '—')
     .replace(/…/g, '...')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/** "ninety" → "nineties", "six" → "sixes", "hundred" → "hundreds", "half" → "halves" */
+function plural(word: string): string {
+  if (word === 'half') return 'halves'
+  if (word.endsWith('y')) return word.slice(0, -1) + 'ies'
+  if (word.endsWith('x')) return word + 'es'
+  return word + 's'
 }
 
 function expandNumberish(groups: Record<string, string | undefined>): string | null {
@@ -115,6 +151,24 @@ function expandNumberish(groups: Record<string, string | undefined>): string | n
     const [d, m, yRaw] = groups.dmy.split('/') as [string, string, string]
     const y = Number(yRaw.length === 2 ? `20${yRaw}` : yRaw)
     return date(Number(d), Number(m), y)
+  }
+  if (groups.frac) {
+    const [a, b] = groups.frac.split('/').map(Number) as [number, number]
+    if (a >= 1 && b >= 2 && a < b && b <= 16) {
+      const unit = b === 2 ? 'half' : b === 4 ? 'quarter' : ordinal(b)
+      return `${cardinal(a)} ${a === 1 ? unit : plural(unit)}`
+    }
+    return `${cardinal(a)} ${a === 24 && b === 7 ? '' : 'slash '}${cardinal(b)}`
+  }
+  if (groups.ratio) {
+    const [a, b] = groups.ratio.split(':').map(Number) as [number, number]
+    return `${cardinal(a)} to ${cardinal(b)}`
+  }
+  if (groups.decade) {
+    const d = groups.decade.replace(/\D/g, '')
+    const n = Number(d)
+    const words = d.length === 4 ? year(n) : cardinal(n)
+    return words.replace(/[a-z]+$/, plural)
   }
   if (groups.time) {
     const m = /^(\d{1,2}):(\d{2})\s?(am|pm|a\.m\.|p\.m\.)?$/.exec(groups.time)!
@@ -160,6 +214,10 @@ function tokenize(text: string): Raw[] {
   }
   return out
 }
+
+const isNumeric = (r: Raw | undefined) =>
+  r?.kind === 'number' || (r?.kind === 'expanded' && /\d/.test(r.source) && !/[/:]/.test(r.source))
+const isDash = (r: Raw | undefined) => r?.kind === 'punct' && r.text === '-'
 
 /** Read a bare number in context: years, dates with a month word, digit strings. */
 function readNumber(text: string, prev: Raw | undefined, next: Raw | undefined): string {
@@ -246,10 +304,14 @@ export function normalizeText(input: string, opts: NormalizeOptions = {}): Sente
         sourceParts.push(r.source)
         words.push(...wordsFor(r.words, r.source, emphasis))
         break
-      case 'number':
+      case 'number': {
         sourceParts.push(r.text)
-        words.push(...wordsFor(readNumber(r.text, raws[i - 1], raws[i + 1]), r.text, emphasis))
+        // a group in a dashed chain (phone and reference numbers) is read digit by digit
+        const chain = (isDash(raws[i - 1]) && (isDash(raws[i + 1]) || isDash(raws[i - 3]))) || (isDash(raws[i + 1]) && isDash(raws[i + 3]))
+        const said = chain && /^\d+$/.test(r.text) ? digits(r.text) : readNumber(r.text, raws[i - 1], raws[i + 1])
+        words.push(...wordsFor(said, r.text, emphasis))
         break
+      }
       case 'word': {
         sourceParts.push(r.text)
         const lower = r.text.toLowerCase()
@@ -282,6 +344,12 @@ export function normalizeText(input: string, opts: NormalizeOptions = {}): Sente
             closePhrase('clause')
             break
           case '-':
+            // "5-10", "£5-10", "1990-1995": a dash between two numbers reads "to"; not in
+            // chains such as phone numbers ("020-7946-0958")
+            if (isNumeric(raws[i - 1]) && isNumeric(raws[i + 1]) && !isDash(raws[i - 2]) && !isDash(raws[i + 2])) {
+              words.push(...wordsFor('to', '-', emphasis))
+            }
+            break
           case '"':
             break
           case '?':

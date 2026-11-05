@@ -288,7 +288,7 @@ export function SpeechPanel() {
         <button
           onClick={() => void copyNeural()}
           disabled={!lexicon || !settings.text.trim() || neuralBusy}
-          title="Strudel code that speaks this text with a neural British voice (Kokoro, run in your browser). The speech is rendered here and carried inside the code as compressed audio, which Strudel decodes and plays as a registered sound. The rate slider sets the speed; pitch and voice presets do not apply."
+          title="Strudel code that speaks this text with a neural British voice (Kokoro, run in your browser). The speech is rendered here and carried inside the code as compressed audio; Strudel cuts it into one sound per word, and the sentence is an ordinary pattern of those words that you can rearrange and add effects to. The rate slider sets the speed; pitch and voice presets do not apply."
         >
           {neuralBusy ? 'Rendering neural voice…' : 'Copy Strudel neural voice'}
         </button>
